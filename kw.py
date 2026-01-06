@@ -23,8 +23,8 @@ from telegram.constants import ParseMode
 # ==================== ⚙️ الإعدادات ====================
 BOT_TOKEN = "8123276127:AAHmLO2UXVY_HSQA7AMljHLlkfE8A-WEWgw"  # 👈 ضع التوكين هنا
 ADMIN_IDS = [8563113166, 7996171713]                # 👈 ضع الآيدي الخاص بك
-DB_NAME = "/data/taxi_master_v6.db"      # تم تغيير الاسم لإنشاء قاعدة جديدة
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "taxi_master_v6.db")
 # ثوابت العمل
 COMMISSION_RATE = 0.15
 DEBT_LIMIT = 50.0
