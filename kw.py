@@ -614,11 +614,17 @@ def main():
 
     
 def main():
-    # استدعاء السيرفر الوهمي لخداع Render
+    # 1. تشغيل سيرفر Flask في الخلفية (للنسخة المجانية من Render)
     keep_alive() 
-    print("🚀 Taxi Bot V6.0 (PostgreSQL/Supabase) Running...")
-    # كود تشغيل البوت الخاص بك
-    app.run_polling(drop_pending_updates=True)
     
+    # 2. بناء التطبيق (تأكد أن السطر التالي موجود ومعرف كـ 'app')
+    # ملاحظة: استبدل TOKEN بتوكن بوتك الحقيقي
+    app = ApplicationBuilder().token("8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8").post_init(post_init).build()
+
+    # 3. تشغيل البوت
+    print("🚀 البوت بدأ العمل الآن...")
+    app.run_polling(drop_pending_updates=True)
+
 if __name__ == '__main__':
     main()
+
