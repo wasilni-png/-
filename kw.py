@@ -5,11 +5,10 @@ import logging
 import asyncio
 import uuid
 import os
-import sqlite3
+import asyncpg  # 👈 المكتبة الجديدة لـ Supabase
+import math
 from datetime import datetime
 from enum import Enum
-import math
-import aiosqlite
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, 
@@ -22,58 +21,73 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # ==================== ⚙️ الإعدادات ====================
-BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 ضع التوكين هنا
-ADMIN_IDS = [8563113166, 7996171713]                # 👈 ضع الآيدي الخاص بك
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "taxi_master_v6.db")
+BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 توكن البوت
+
+# 🛑 هام جداً: ضع رابط Supabase هنا
+# يبدو الرابط مثل: postgresql://postgres:PASSWORD@db.xyz.supabase.co:5432/postgres
+DB_URL = "postgresql://postgres:/DPK%_fbpL9M5R%@db.sdbtyanzweljiaqjnqxd.supabase.co:5432/postgres" 
+
+ADMIN_IDS = [8563113166, 7996171713]
+
 # ثوابت العمل
 COMMISSION_RATE = 0.15
 DEBT_LIMIT = 50.0
 SEARCH_RADIUS = 20
 MAX_DRIVERS_NOTIFY = 15
+
 def is_admin(user_id: int) -> bool:
     """التحقق من وجود المستخدم في قائمة الإدارة"""
     return user_id in ADMIN_IDS
-# ==================== 🗄️ قاعدة البيانات ====================
+
+# ==================== 🗄️ قاعدة البيانات (PostgreSQL) ====================
 async def init_db():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('''
+    # إنشاء اتصال بقاعدة البيانات
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        # جدول المستخدمين
+        # تم تغيير أنواع البيانات لتناسب PostgreSQL (BIGINT, DOUBLE PRECISION, BOOLEAN)
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                chat_id INTEGER,
+                user_id BIGINT PRIMARY KEY,
+                chat_id BIGINT,
                 role TEXT,
                 name TEXT,
                 phone TEXT,
                 car_info TEXT,
-                lat REAL DEFAULT 0.0,
-                lon REAL DEFAULT 0.0,
-                debt REAL DEFAULT 0.0,
-                is_blocked INTEGER DEFAULT 0,
-                is_verified INTEGER DEFAULT 0,  -- 🆕 للتوثيق
-                photo_license TEXT,             -- 🆕 صورة الرخصة
-                photo_car TEXT,                 -- 🆕 صورة السيارة
-                photo_id_card TEXT,             -- 🆕 صورة الهوية
+                lat DOUBLE PRECISION DEFAULT 0.0,
+                lon DOUBLE PRECISION DEFAULT 0.0,
+                debt DOUBLE PRECISION DEFAULT 0.0,
+                is_blocked BOOLEAN DEFAULT FALSE,
+                is_verified BOOLEAN DEFAULT FALSE,
+                photo_license TEXT,
+                photo_car TEXT,
+                photo_id_card TEXT,
                 total_trips INTEGER DEFAULT 0,
-                rating REAL DEFAULT 5.0,
+                rating DOUBLE PRECISION DEFAULT 5.0,
                 current_trip_id TEXT
             )
         ''')
-        await db.execute('''
+        
+        # جدول الرحلات
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS trips (
                 trip_id TEXT PRIMARY KEY,
-                rider_id INTEGER,
-                driver_id INTEGER,
-                pickup_lat REAL,
-                pickup_lon REAL,
+                rider_id BIGINT,
+                driver_id BIGINT,
+                pickup_lat DOUBLE PRECISION,
+                pickup_lon DOUBLE PRECISION,
                 dest_desc TEXT,
-                price REAL DEFAULT 0.0,
+                price DOUBLE PRECISION DEFAULT 0.0,
                 status TEXT,
                 created_at TIMESTAMP,
                 completed_at TIMESTAMP
             )
         ''')
-        await db.commit()
-    print("✅ Database V6.0 (Verified) Ready.")
+        print("✅ Database Connected (Supabase PostgreSQL) Ready.")
+    except Exception as e:
+        print(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
+    finally:
+        await conn.close()
 
 # ==================== 🛠️ مساعدات ====================
 class UserRole(str, Enum):
@@ -97,8 +111,9 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def get_main_kb(role, is_verified=1):
+def get_main_kb(role, is_verified=True):
     if role == UserRole.DRIVER:
+        # ملاحظة: في بايثون True هو 1، لذا الشرط يعمل
         if not is_verified:
             return ReplyKeyboardMarkup([[KeyboardButton("ℹ️ حالة الحساب: قيد المراجعة")]], resize_keyboard=True)
         return ReplyKeyboardMarkup([
@@ -115,24 +130,26 @@ def get_main_kb(role, is_verified=1):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cursor:
-            user = await cursor.fetchone()
-    
-    if user:
-        if user['is_blocked']:
-            await update.message.reply_text("⛔ حسابك محظور.")
-            return
-        # التحقق من التوثيق للسائق
-        verified = user['is_verified'] if user['role'] == 'driver' else 1
-        await update.message.reply_text(f"👋 أهلاً {user['name']}", reply_markup=get_main_kb(user['role'], verified))
-    else:
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 أنا راكب", callback_data="reg_rider")],
-            [InlineKeyboardButton("🚗 أنا سائق", callback_data="reg_driver")]
-        ])
-        await update.message.reply_text("👋 مرحباً بك.\nاختر نوع الحساب:", reply_markup=kb)
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        # استخدام $1 بدلاً من ?
+        user = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
+        
+        if user:
+            if user['is_blocked']:
+                await update.message.reply_text("⛔ حسابك محظور.")
+                return
+            
+            verified = user['is_verified'] if user['role'] == 'driver' else True
+            await update.message.reply_text(f"👋 أهلاً {user['name']}", reply_markup=get_main_kb(user['role'], verified))
+        else:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👤 أنا راكب", callback_data="reg_rider")],
+                [InlineKeyboardButton("🚗 أنا سائق", callback_data="reg_driver")]
+            ])
+            await update.message.reply_text("👋 مرحباً بك.\nاختر نوع الحساب:", reply_markup=kb)
+    finally:
+        await conn.close()
 
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -152,7 +169,7 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
         if context.user_data['reg_role'] == UserRole.RIDER:
-            await finalize_registration(update, context) # الراكب لا يحتاج توثيق
+            await finalize_registration(update, context) 
         else:
             await update.message.reply_text("📱 رقم الهاتف للتواصل:")
             context.user_data['state'] = 'WAIT_PHONE'
@@ -166,7 +183,6 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif state == 'WAIT_CAR':
         context.user_data['reg_car'] = text
-        # بدء مرحلة الصور للسائق
         await update.message.reply_text("📸 **مطلوب التوثيق**\nالرجاء إرسال **صورة رخصة القيادة** الآن:")
         context.user_data['state'] = 'WAIT_PHOTO_LICENSE'
         return
@@ -177,7 +193,7 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⚠️ الرجاء إرسال صورة فقط.")
             return
         
-        photo_id = update.message.photo[-1].file_id # جلب أعلى جودة
+        photo_id = update.message.photo[-1].file_id 
         
         if state == 'WAIT_PHOTO_LICENSE':
             context.user_data['photo_license'] = photo_id
@@ -211,10 +227,14 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     # الدردشة والقوائم
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM trips WHERE status='accepted' AND (rider_id=? OR driver_id=?)", (user_id, user_id)) as cursor:
-            active_trip = await cursor.fetchone()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        active_trip = await conn.fetchrow(
+            "SELECT * FROM trips WHERE status='accepted' AND (rider_id=$1 OR driver_id=$2)", 
+            user_id, user_id
+        )
+    finally:
+        await conn.close()
 
     if active_trip:
         if text in ["/end", "انهاء", "تم"]: await manual_complete_trip(update, context)
@@ -234,12 +254,19 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
 async def finalize_registration(update, context): # للركاب
     uid = update.effective_user.id
     name = context.user_data['reg_name']
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO users (user_id, chat_id, role, name, is_verified)
-            VALUES (?, ?, 'rider', ?, 1)
-        """, (uid, update.effective_chat.id, name))
-        await db.commit()
+    
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        # استخدام ON CONFLICT بدلاً من OR REPLACE
+        await conn.execute("""
+            INSERT INTO users (user_id, chat_id, role, name, is_verified)
+            VALUES ($1, $2, 'rider', $3, TRUE)
+            ON CONFLICT (user_id) DO UPDATE 
+            SET name = EXCLUDED.name, chat_id = EXCLUDED.chat_id
+        """, uid, update.effective_chat.id, name)
+    finally:
+        await conn.close()
+        
     context.user_data.clear()
     await update.message.reply_text("✅ تم التسجيل.", reply_markup=get_main_kb(UserRole.RIDER))
 
@@ -247,50 +274,35 @@ async def finalize_registration_driver(update, context): # للسائقين
     uid = update.effective_user.id
     d = context.user_data
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO users (user_id, chat_id, role, name, phone, car_info, photo_license, photo_car, photo_id_card, is_verified)
-            VALUES (?, ?, 'driver', ?, ?, ?, ?, ?, ?, 0)
-        """, (uid, update.effective_chat.id, d['reg_name'], d['reg_phone'], d['reg_car'], 
-              d['photo_license'], d['photo_car'], d['photo_id_card']))
-        await db.commit()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        await conn.execute("""
+            INSERT INTO users (user_id, chat_id, role, name, phone, car_info, photo_license, photo_car, photo_id_card, is_verified)
+            VALUES ($1, $2, 'driver', $3, $4, $5, $6, $7, $8, FALSE)
+            ON CONFLICT (user_id) DO UPDATE 
+            SET name = EXCLUDED.name, phone = EXCLUDED.phone, car_info = EXCLUDED.car_info
+        """, uid, update.effective_chat.id, d['reg_name'], d['reg_phone'], d['reg_car'], 
+              d['photo_license'], d['photo_car'], d['photo_id_card'])
+    finally:
+        await conn.close()
     
-    # إشعار الأدمن بالتوثيق
-    msg = (
-        f"🚨 **طلب توثيق سائق جديد**\n"
-        f"👤 الاسم: {d['reg_name']}\n"
-        f"📱 الجوال: {d['reg_phone']}\n"
-        f"🚘 السيارة: {d['reg_car']}\n"
-        f"🆔 UserID: `{uid}`"
-    )
-    
-    # إرسال الصور كألبوم
+    msg = f"🚨 **طلب توثيق سائق جديد**\n👤 الاسم: {d['reg_name']}\n🆔 UserID: `{uid}`"
     media = [
         InputMediaPhoto(d['photo_license'], caption="الرخصة"),
         InputMediaPhoto(d['photo_car'], caption="السيارة"),
         InputMediaPhoto(d['photo_id_card'], caption="الهوية")
     ]
-    
     kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ قبول وتفعيل", callback_data=f"verify_ok_{uid}")],
-            [InlineKeyboardButton("❌ رفض وحظر", callback_data=f"verify_no_{uid}")]
-        ])
+        [InlineKeyboardButton("✅ قبول وتفعيل", callback_data=f"verify_ok_{uid}")],
+        [InlineKeyboardButton("❌ رفض وحظر", callback_data=f"verify_no_{uid}")]
+    ])
 
     for admin_id in ADMIN_IDS:
         try:
-            # 1. إرسال مجموعة الصور للأدمن الحالي
             await context.bot.send_media_group(chat_id=admin_id, media=media)
-            
-            # 2. إرسال الرسالة النصية مع الأزرار للأدمن الحالي
-            await context.bot.send_message(
-                chat_id=admin_id, 
-                text=msg, 
-                reply_markup=kb, 
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await context.bot.send_message(chat_id=admin_id, text=msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
-            # إذا فشل الإرسال لأدمن واحد (مثلاً حظر البوت)، يطبع الخطأ ويكمل للباقين
-            print(f"⚠️ تعذر الإرسال إلى {admin_id}: {e}")
+            print(f"⚠️ فشل الإرسال للأدمن {admin_id}: {e}")
 
     context.user_data.clear()
 
@@ -300,23 +312,23 @@ async def admin_verify_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     action, target_id = query.data.split("_")[1], int(query.data.split("_")[2])
     
-    async with aiosqlite.connect(DB_NAME) as db:
+    conn = await asyncpg.connect(DB_URL)
+    try:
         if action == "ok":
-            await db.execute("UPDATE users SET is_verified=1, is_blocked=0 WHERE user_id=?", (target_id,))
-            await db.commit()
+            await conn.execute("UPDATE users SET is_verified=TRUE, is_blocked=FALSE WHERE user_id=$1", target_id)
             await query.edit_message_text(f"✅ تم تفعيل السائق {target_id}")
-            # إشعار السائق
-            async with db.execute("SELECT chat_id FROM users WHERE user_id=?", (target_id,)) as c:
-                row = await c.fetchone()
-                if row: 
-                    await context.bot.send_message(row[0], "🎉 **مبروك!** تم توثيق حسابك بنجاح.\nيمكنك الآن استقبال الطلبات.", reply_markup=get_main_kb(UserRole.DRIVER, 1))
+            
+            row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", target_id)
+            if row: 
+                await context.bot.send_message(row['chat_id'], "🎉 **مبروك!** تم توثيق حسابك بنجاح.", reply_markup=get_main_kb(UserRole.DRIVER, True))
         else:
-            await db.execute("UPDATE users SET is_verified=0, is_blocked=1 WHERE user_id=?", (target_id,))
-            await db.commit()
+            await conn.execute("UPDATE users SET is_verified=FALSE, is_blocked=TRUE WHERE user_id=$1", target_id)
             await query.edit_message_text(f"❌ تم رفض وحظر السائق {target_id}")
-            async with db.execute("SELECT chat_id FROM users WHERE user_id=?", (target_id,)) as c:
-                row = await c.fetchone()
-                if row: await context.bot.send_message(row[0], "❌ نأسف، تم رفض طلب انضمامك لعدم استيفاء الشروط.")
+            
+            row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", target_id)
+            if row: await context.bot.send_message(row['chat_id'], "❌ نأسف، تم رفض طلبك.")
+    finally:
+        await conn.close()
 
 # ==================== 📍 المنطق (مع التحقق) ====================
 
@@ -324,12 +336,12 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lat, lon = update.message.location.latitude, update.message.location.longitude
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("UPDATE users SET lat=?, lon=? WHERE user_id=?", (lat, lon, user_id))
-        await db.commit()
-        async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cursor:
-            user = await cursor.fetchone()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        await conn.execute("UPDATE users SET lat=$1, lon=$2 WHERE user_id=$3", lat, lon, user_id)
+        user = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
+    finally:
+        await conn.close()
 
     if context.user_data.get('expect_location') == 'pickup':
         context.user_data['pickup_coords'] = (lat, lon)
@@ -339,21 +351,20 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user['role'] == UserRole.DRIVER:
-        # 🛡️ تحقق من التوثيق
-        if user['is_verified'] == 0:
-            await update.message.reply_text("⏳ حسابك قيد المراجعة، يرجى انتظار موافقة الإدارة.")
+        if not user['is_verified']:
+            await update.message.reply_text("⏳ حسابك قيد المراجعة.")
             return
         if user['is_blocked'] or user['debt'] >= DEBT_LIMIT:
             await update.message.reply_text("❌ حسابك موقوف (ديون أو حظر).")
             return
-        
         if user['current_trip_id']: return 
 
         # البحث عن طلبات
-        async with aiosqlite.connect(DB_NAME) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM trips WHERE status=?", (TripStatus.PENDING,)) as cursor:
-                pending = await cursor.fetchall()
+        conn = await asyncpg.connect(DB_URL)
+        try:
+            pending = await conn.fetch("SELECT * FROM trips WHERE status=$1", TripStatus.PENDING)
+        finally:
+            await conn.close()
         
         found = 0
         for trip in pending:
@@ -368,18 +379,19 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['expect_location'] = None
 
 async def process_trip_request(update, context, price):
-    # ... (نفس الكود السابق للطلب)
     rider_id = update.effective_user.id
     pickup = context.user_data['pickup_coords']
     dest = context.user_data['dest_desc']
     trip_id = str(uuid.uuid4())[:8]
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        await conn.execute("""
             INSERT INTO trips (trip_id, rider_id, pickup_lat, pickup_lon, dest_desc, price, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (trip_id, rider_id, pickup[0], pickup[1], dest, price, TripStatus.PENDING, datetime.now()))
-        await db.commit()
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, trip_id, rider_id, pickup[0], pickup[1], dest, price, TripStatus.PENDING, datetime.now())
+    finally:
+        await conn.close()
     
     admin_msg = f"🆕 طلب رحلة جديد:\n💰 السعر: {price} ريال\n📍 الوجهة: {dest}\n🆔 آيدي الراكب: `{rider_id}`"
     for admin_id in ADMIN_IDS:
@@ -392,15 +404,15 @@ async def process_trip_request(update, context, price):
     await broadcast_trip_to_drivers(context, trip_id, pickup, dest, price)
 
 async def broadcast_trip_to_drivers(context, trip_id, pickup, dest, price):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        # 🛡️ البحث فقط عن السائقين الموثقين
-        async with db.execute("""
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        drivers = await conn.fetch("""
             SELECT * FROM users 
-            WHERE role=? AND is_blocked=0 AND is_verified=1 AND debt < ? 
+            WHERE role=$1 AND is_blocked=FALSE AND is_verified=TRUE AND debt < $2 
             AND (current_trip_id IS NULL OR current_trip_id = '')
-        """, (UserRole.DRIVER, DEBT_LIMIT)) as cursor:
-            drivers = await cursor.fetchall()
+        """, UserRole.DRIVER, DEBT_LIMIT)
+    finally:
+        await conn.close()
             
     for driver in drivers:
         dist = haversine(pickup[0], pickup[1], driver['lat'], driver['lon'])
@@ -415,30 +427,26 @@ async def accept_trip_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     trip_id = query.data.split("_")[1]
     driver_id = query.from_user.id
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        # 🛡️ تحقق إضافي من التوثيق
-        async with db.execute("SELECT is_verified FROM users WHERE user_id=?", (driver_id,)) as c:
-            u = await c.fetchone()
-            if not u or u['is_verified'] == 0:
-                await query.answer("❌ حسابك غير موثق.", show_alert=True)
-                return
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        u = await conn.fetchrow("SELECT is_verified FROM users WHERE user_id=$1", driver_id)
+        if not u or not u['is_verified']:
+            await query.answer("❌ حسابك غير موثق.", show_alert=True)
+            return
 
-        # بقية كود القبول (كما هو)
-        async with db.execute("SELECT * FROM trips WHERE trip_id=?", (trip_id,)) as cursor:
-            trip = await cursor.fetchone()
-        
+        trip = await conn.fetchrow("SELECT * FROM trips WHERE trip_id=$1", trip_id)
         if not trip or trip['status'] != TripStatus.PENDING:
             await query.answer("❌ راحت عليك!", show_alert=True)
             await query.edit_message_text("❌ انتهى العرض.")
             return
 
-        await db.execute("UPDATE trips SET driver_id=?, status=? WHERE trip_id=?", (driver_id, TripStatus.ACCEPTED, trip_id))
-        await db.execute("UPDATE users SET current_trip_id=? WHERE user_id IN (?, ?)", (trip_id, driver_id, trip['rider_id']))
-        await db.commit()
+        await conn.execute("UPDATE trips SET driver_id=$1, status=$2 WHERE trip_id=$3", driver_id, TripStatus.ACCEPTED, trip_id)
+        await conn.execute("UPDATE users SET current_trip_id=$1 WHERE user_id IN ($2, $3)", trip_id, driver_id, trip['rider_id'])
         
-        async with db.execute("SELECT * FROM users WHERE user_id=?", (trip['rider_id'],)) as c: rider = await c.fetchone()
-        async with db.execute("SELECT * FROM users WHERE user_id=?", (driver_id,)) as c: driver = await c.fetchone()
+        rider = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", trip['rider_id'])
+        driver = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", driver_id)
+    finally:
+        await conn.close()
 
     await query.answer()
     kb_d = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 إنهاء", callback_data=f"end_{trip_id}")]])
@@ -447,35 +455,33 @@ async def accept_trip_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     kb_r = InlineKeyboardMarkup([[InlineKeyboardButton("👋 إنهاء", callback_data=f"end_{trip_id}")]])
     await context.bot.send_message(rider['chat_id'], f"🚗 السائق قادم!\nالكابتن: {driver['name']}\nالسيارة: {driver['car_info']}", reply_markup=kb_r)
 
-# --- بقية الدوال المساعدة (إنهاء، أدمن، إلخ) ---
-# يتم نسخها كما هي من الكود السابق V5.0 مع التأكد من وجود notify_admin و manual_complete_trip
 async def end_trip_callback(update, context): 
     await perform_trip_completion(context, update.callback_query.data.split("_")[1])
     await update.callback_query.answer()
 
 async def manual_complete_trip(update, context):
     user_id = update.effective_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT trip_id FROM trips WHERE status='accepted' AND (driver_id=? OR rider_id=?)", (user_id, user_id)) as cursor:
-            row = await cursor.fetchone()
-            if row: await perform_trip_completion(context, row['trip_id'])
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        row = await conn.fetchrow("SELECT trip_id FROM trips WHERE status='accepted' AND (driver_id=$1 OR rider_id=$2)", user_id, user_id)
+        if row: await perform_trip_completion(context, row['trip_id'])
+    finally:
+        await conn.close()
 
 async def perform_trip_completion(context, trip_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM trips WHERE trip_id=?", (trip_id,)) as cursor:
-            trip = await cursor.fetchone()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        trip = await conn.fetchrow("SELECT * FROM trips WHERE trip_id=$1", trip_id)
         if not trip: return
         
         commission = trip['price'] * COMMISSION_RATE
-        await db.execute("UPDATE trips SET status=?, completed_at=? WHERE trip_id=?", (TripStatus.COMPLETED, datetime.now(), trip_id))
-        await db.execute("UPDATE users SET current_trip_id=NULL WHERE user_id IN (?, ?)", (trip['driver_id'], trip['rider_id']))
-        await db.execute("UPDATE users SET debt = debt + ?, total_trips = total_trips + 1 WHERE user_id=?", (commission, trip['driver_id']))
-        await db.commit()
+        await conn.execute("UPDATE trips SET status=$1, completed_at=$2 WHERE trip_id=$3", TripStatus.COMPLETED, datetime.now(), trip_id)
+        await conn.execute("UPDATE users SET current_trip_id=NULL WHERE user_id IN ($1, $2)", trip['driver_id'], trip['rider_id'])
+        await conn.execute("UPDATE users SET debt = debt + $1, total_trips = total_trips + 1 WHERE user_id=$2", commission, trip['driver_id'])
         
-        async with db.execute("SELECT user_id, chat_id FROM users WHERE user_id IN (?, ?)", (trip['driver_id'], trip['rider_id'])) as c:
-            users = await c.fetchall()
+        users = await conn.fetch("SELECT user_id, chat_id FROM users WHERE user_id IN ($1, $2)", trip['driver_id'], trip['rider_id'])
+    finally:
+        await conn.close()
             
     await notify_admin(context, f"✅ رحلة انتهت: {trip_id}\n💰 عمولة: {commission:.2f}")
     for u in users:
@@ -483,66 +489,76 @@ async def perform_trip_completion(context, trip_id):
             msg = f"🏁 شكراً لك.\nالسعر: {trip['price']}"
             if u['user_id'] == trip['driver_id']: msg += f"\nالعمولة المخصومة: {commission:.2f}"
             role = UserRole.DRIVER if u['user_id'] == trip['driver_id'] else UserRole.RIDER
-            await context.bot.send_message(u['chat_id'], msg, reply_markup=get_main_kb(role, 1))
+            await context.bot.send_message(u['chat_id'], msg, reply_markup=get_main_kb(role, True))
         except: pass
 
 async def relay_chat_message(update, context, trip):
-    # نفس الكود السابق
     sender_id = update.effective_user.id
     receiver_id = trip['rider_id'] if sender_id == trip['driver_id'] else trip['driver_id']
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT chat_id FROM users WHERE user_id=?", (receiver_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                try:
-                    role = "🚖 الكابتن" if sender_id == trip['driver_id'] else "👤 الراكب"
-                    if update.message.text: await context.bot.send_message(row[0], f"💬 {role}: {update.message.text}")
-                    elif update.message.location: await context.bot.send_location(row[0], update.message.location.latitude, update.message.location.longitude)
-                except: pass
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", receiver_id)
+        if row:
+            try:
+                role = "🚖 الكابتن" if sender_id == trip['driver_id'] else "👤 الراكب"
+                if update.message.text: await context.bot.send_message(row['chat_id'], f"💬 {role}: {update.message.text}")
+                elif update.message.location: await context.bot.send_location(row['chat_id'], update.message.location.latitude, update.message.location.longitude)
+            except: pass
+    finally:
+        await conn.close()
 
 async def show_balance(update, context):
     user_id = update.effective_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT debt FROM users WHERE user_id=?", (user_id,)) as c:
-            d = await c.fetchone()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        d = await conn.fetchrow("SELECT debt FROM users WHERE user_id=$1", user_id)
+    finally:
+        await conn.close()
     if d: await update.message.reply_text(f"💰 المحفظة:\nعليك: {d['debt']:.2f} ريال\nالحد: {DEBT_LIMIT}")
 
 async def notify_admin(context, msg):
-    try: await context.bot.send_message(ADMIN_IDS, msg)
-    except: pass
+    for admin_id in ADMIN_IDS:
+        try: await context.bot.send_message(admin_id, msg)
+        except: pass
 
 async def admin_help(update, context):
     if not is_admin(update.effective_user.id): return
     await update.message.reply_text("👮 /debts, /block [id], /unblock [id], /reset [id], /bc [msg]")
 
-async def admin_debts_list(update, context): # نفس V5.0
+async def admin_debts_list(update, context):
     if not is_admin(update.effective_user.id): return
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT name, debt, phone FROM users WHERE role='driver' AND debt>0") as c:
-            drivers = await c.fetchall()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        drivers = await conn.fetch("SELECT name, debt, phone FROM users WHERE role='driver' AND debt>0")
+    finally:
+        await conn.close()
     msg = "📊 الديون:\n" + "\n".join([f"{d['name']} ({d['phone']}): {d['debt']}" for d in drivers])
     await update.message.reply_text(msg if drivers else "لا يوجد ديون")
 
-async def admin_actions(update, context): # نفس V5.0
+async def admin_actions(update, context):
     if not is_admin(update.effective_user.id): return
     cmd = update.message.text.split()[0]
     if not context.args: return await update.message.reply_text("Id required")
     tid = int(context.args[0])
-    async with aiosqlite.connect(DB_NAME) as db:
-        if "/reset" in cmd: await db.execute("UPDATE users SET debt=0 WHERE user_id=?", (tid,))
-        elif "/block" in cmd: await db.execute("UPDATE users SET is_blocked=1 WHERE user_id=?", (tid,))
-        elif "/unblock" in cmd: await db.execute("UPDATE users SET is_blocked=0 WHERE user_id=?", (tid,))
-        await db.commit()
+    
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        if "/reset" in cmd: await conn.execute("UPDATE users SET debt=0 WHERE user_id=$1", tid)
+        elif "/block" in cmd: await conn.execute("UPDATE users SET is_blocked=TRUE WHERE user_id=$1", tid)
+        elif "/unblock" in cmd: await conn.execute("UPDATE users SET is_blocked=FALSE WHERE user_id=$1", tid)
+    finally:
+        await conn.close()
     await update.message.reply_text("✅ Done")
 
-async def admin_broadcast(update, context): # نفس V5.0
+async def admin_broadcast(update, context):
     if not is_admin(update.effective_user.id): return
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT chat_id FROM users") as c: ids = await c.fetchall()
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        ids = await conn.fetch("SELECT chat_id FROM users")
+    finally:
+        await conn.close()
     for i in ids: 
-        try: await context.bot.send_message(i[0], "📢 " + " ".join(context.args))
+        try: await context.bot.send_message(i['chat_id'], "📢 " + " ".join(context.args))
         except: pass
     await update.message.reply_text("✅ Sent")
 
@@ -574,14 +590,12 @@ def main():
     
     # الكول باك (أزرار)
     app.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
-    app.add_handler(CallbackQueryHandler(admin_verify_callback, pattern="^verify_")) # 🆕 معالج التوثيق
+    app.add_handler(CallbackQueryHandler(admin_verify_callback, pattern="^verify_"))
     app.add_handler(CallbackQueryHandler(accept_trip_callback, pattern="^accept_"))
     app.add_handler(CallbackQueryHandler(end_trip_callback, pattern="^end_"))
 
-    print("🚀 Taxi Bot V6.0 (Secure & Verified) Running...")
+    print("🚀 Taxi Bot V6.0 (PostgreSQL/Supabase) Running...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
-
-# Hammod
