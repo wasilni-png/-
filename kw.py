@@ -19,6 +19,24 @@ from telegram.ext import (
     ContextTypes, filters, ApplicationBuilder
 )
 from telegram.constants import ParseMode
+from flask import Flask
+from threading import Thread
+import os
+
+app_flask = Flask('')
+
+@app_flask.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    # Render يعطي المنفذ تلقائياً في متغير PORT
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
 
 # ==================== ⚙️ الإعدادات ====================
 BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 توكن البوت
@@ -595,7 +613,12 @@ def main():
     app.add_handler(CallbackQueryHandler(end_trip_callback, pattern="^end_"))
 
     print("🚀 Taxi Bot V6.0 (PostgreSQL/Supabase) Running...")
+def main():
+    # استدعاء السيرفر الوهمي لخداع Render
+    keep_alive() 
+    
+    # كود تشغيل البوت الخاص بك
     app.run_polling(drop_pending_updates=True)
-
+    
 if __name__ == '__main__':
     main()
