@@ -59,11 +59,13 @@ def is_admin(user_id: int) -> bool:
 
 # ==================== 🗄️ قاعدة البيانات (PostgreSQL) ====================
 async def init_db():
-    # إنشاء اتصال بقاعدة البيانات
-    conn = await asyncpg.connect(DB_URL)
+    print("🔄 جاري محاولة الاتصال بـ Supabase...")
     try:
-        # جدول المستخدمين
-        # تم تغيير أنواع البيانات لتناسب PostgreSQL (BIGINT, DOUBLE PRECISION, BOOLEAN)
+        # الاتصال باستخدام الإعدادات المتوافقة مع Render و Supabase
+        # تأكد أن DB_URL يستخدم المنفذ 6543
+        conn = await asyncpg.connect(DB_URL, ssl=False, timeout=15)
+        
+        # إنشاء جدول المستخدمين
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
