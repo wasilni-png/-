@@ -593,7 +593,7 @@ def main():
     keep_alive()
     
     # 2. إعداد التوكن وبناء التطبيق
-    TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"
+    BOT_TOKEN = "8588537913:AAE9KFLiemKBD5N-zhCF3tjTqfCseXVbcaY"
     app = (
         ApplicationBuilder()
         .token(TOKEN)
