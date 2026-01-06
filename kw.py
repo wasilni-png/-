@@ -39,7 +39,7 @@ def keep_alive():
     t.start()
 
 # ==================== ⚙️ الإعدادات ====================
-BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 توكن البوت
+#BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 توكن البوت
 
 # 🛑 هام جداً: ضع رابط Supabase هنا
 # يبدو الرابط مثل: postgresql://postgres:PASSWORD@db.xyz.supabase.co:5432/postgres
