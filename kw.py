@@ -616,17 +616,11 @@ def main():
 
     
 def main():
-    # 1. تشغيل سيرفر Flask في الخلفية (للنسخة المجانية من Render)
-    keep_alive() 
-    
-    # 2. بناء التطبيق (تأكد أن السطر التالي موجود ومعرف كـ 'app')
-    # ملاحظة: استبدل TOKEN بتوكن بوتك الحقيقي
-    app = ApplicationBuilder().token("8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8").post_init(post_init).build()
-# تأكد أنك أضفت المعالج (Handler) قبل تشغيل polling
-app.add_handler(CommandHandler("start", start))
-    
-    # 3. تشغيل البوت
-print("🚀 البوت بدأ العمل الآن...")
+    keep_alive()
+    token = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"
+    app = ApplicationBuilder().token(token).post_init(post_init).build()
+    # تأكد أن السطرين القادمين لا يميلان لليمين أكثر من الأسطر السابقة
+    print("🚀 البوت بدأ العمل الآن...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
