@@ -4,6 +4,7 @@
 import logging
 import asyncio
 import uuid
+import os
 import sqlite3
 from datetime import datetime
 from enum import Enum
