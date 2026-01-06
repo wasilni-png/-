@@ -612,11 +612,11 @@ def main():
     app.add_handler(CallbackQueryHandler(accept_trip_callback, pattern="^accept_"))
     app.add_handler(CallbackQueryHandler(end_trip_callback, pattern="^end_"))
 
-    print("🚀 Taxi Bot V6.0 (PostgreSQL/Supabase) Running...")
+    
 def main():
     # استدعاء السيرفر الوهمي لخداع Render
     keep_alive() 
-    
+    print("🚀 Taxi Bot V6.0 (PostgreSQL/Supabase) Running...")
     # كود تشغيل البوت الخاص بك
     app.run_polling(drop_pending_updates=True)
     
