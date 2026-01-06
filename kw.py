@@ -582,47 +582,48 @@ async def admin_broadcast(update, context):
         except: pass
     await update.message.reply_text("✅ Sent")
 
-# ==================== 🏁 التشغيل ====================
+# ==================== 🏁 التشغيل النهائي الموحد ====================
+
 async def post_init(application: Application):
+    """تهيئة قاعدة البيانات عند بدء تشغيل البوت"""
     await init_db()
 
 def main():
-    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+    # 1. تشغيل السيرفر الوهمي لخداع Render
+    keep_alive()
+    
+    # 2. إعداد التوكن وبناء التطبيق
+    TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"
     app = (
         ApplicationBuilder()
-        .token(BOT_TOKEN)
+        .token(TOKEN)
         .post_init(post_init)
-        .connect_timeout(60).read_timeout(60).write_timeout(60)
         .build()
     )
 
+    # 3. تسجيل جميع المعالجات (Handlers) - هامة جداً لكي يستجيب البوت
     app.add_handler(CommandHandler("start", start_command))
-    
-    # أوامر الأدمن
     app.add_handler(CommandHandler("admin", admin_help))
     app.add_handler(CommandHandler("debts", admin_debts_list))
     app.add_handler(CommandHandler("bc", admin_broadcast))
     app.add_handler(CommandHandler(["block", "unblock", "reset"], admin_actions))
-    
-    # معالجة الصور والنصوص (مدمجة)
+
+    # معالجة الصور، المواقع، والنصوص
     app.add_handler(MessageHandler(filters.LOCATION, location_handler))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, global_message_handler))
-    
-    # الكول باك (أزرار)
+
+    # معالجة أزرار الإنلاين (Callbacks)
     app.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     app.add_handler(CallbackQueryHandler(admin_verify_callback, pattern="^verify_"))
     app.add_handler(CallbackQueryHandler(accept_trip_callback, pattern="^accept_"))
     app.add_handler(CallbackQueryHandler(end_trip_callback, pattern="^end_"))
 
+    print("🚀 البوت بدأ العمل الآن بنسخة واحدة مستقرة...")
     
-def main():
-    keep_alive()
-    token = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"
-    app = ApplicationBuilder().token(token).post_init(post_init).build()
-    # تأكد أن السطرين القادمين لا يميلان لليمين أكثر من الأسطر السابقة
-    print("🚀 البوت بدأ العمل الآن...")
+    # 4. بدء التشغيل مع تنظيف التحديثات القديمة لمنع الـ Conflict
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
+
 
