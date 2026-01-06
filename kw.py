@@ -624,9 +624,9 @@ def main():
     app = ApplicationBuilder().token("8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8").post_init(post_init).build()
 # تأكد أنك أضفت المعالج (Handler) قبل تشغيل polling
 app.add_handler(CommandHandler("start", start))
-
+    
     # 3. تشغيل البوت
-    print("🚀 البوت بدأ العمل الآن...")
+print("🚀 البوت بدأ العمل الآن...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
