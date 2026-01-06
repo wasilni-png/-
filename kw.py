@@ -25,7 +25,7 @@ BOT_TOKEN = "8588537913:AAH8FAoHAOEru1P8JqFh0khJ-WVDMoS32o8"  # 👈 توكن ا
 
 # 🛑 هام جداً: ضع رابط Supabase هنا
 # يبدو الرابط مثل: postgresql://postgres:PASSWORD@db.xyz.supabase.co:5432/postgres
-DB_URL = "postgresql://postgres:dentmishwar123@db.sdbtyanzweljiaqjnqxd.supabase.co:5432/postgres" 
+DB_URL = "postgresql://postgres.sdbtyanzweljiaqjnqxd:dentmishwar123@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
 
 ADMIN_IDS = [8563113166, 7996171713]
 
