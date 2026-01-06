@@ -648,7 +648,7 @@ def main():
 
     print("🚀 البوت بدأ العمل الآن بنسخة واحدة مستقرة...")
     
-    app.run_polling(drop_pending_updates=True, close_if_run_reentry=True)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
