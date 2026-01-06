@@ -596,7 +596,7 @@ def main():
     BOT_TOKEN = "8588537913:AAE9KFLiemKBD5N-zhCF3tjTqfCseXVbcaY"
     app = (
         ApplicationBuilder()
-        .token(TOKEN)
+        .token(BOT_TOKEN)
         .post_init(post_init)
         .build()
     )
