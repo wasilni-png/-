@@ -2,653 +2,628 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import asyncio
-import uuid
-import os
-import asyncpg
-import math
+import threading
 from datetime import datetime
+from math import radians, cos, sin, asin, sqrt
 from enum import Enum
 
+# مكتبات Flask
+from flask import Flask
+
+# مكتبات قاعدة البيانات
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# مكتبات تليجرام
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, 
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputMediaPhoto
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, KeyboardButton
 )
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ApplicationBuilder
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
 from telegram.constants import ParseMode
-from flask import Flask
-from threading import Thread
-import os
 
-app_flask = Flask('')
+# ==================== ⚙️ 1. الإعدادات ====================
 
-@app_flask.route('/')
-def home():
-    return "Bot is alive!"
+# 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
+DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
+BOT_TOKEN = "8132714296:AAHPP-HsTIteeygaHGCliixcaoE0-OPC7vc"
 
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app_flask.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
-
-# ==================== ⚙️ الإعدادات ====================
-DB_URL = "postgresql://postgres.sdbtyanzweljiaqjnqxd:dentmishwar123@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
+# آيدي المشرفين
 ADMIN_IDS = [8563113166, 7996171713]
 
-# ثوابت العمل
-COMMISSION_RATE = 0.15
-DEBT_LIMIT = 50.0
-SEARCH_RADIUS = 20
-MAX_DRIVERS_NOTIFY = 15
+# الكلمات المفتاحية للبحث في المجموعات
+KEYWORDS = ["مشوار", "توصيل", "سائق", "كابتن", "سيارة", "وينك", "متاح", "مطلوب", "ابي", "بغيت"]
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+# الذاكرة المؤقتة (Cache)
+USER_CACHE = {}         # لتسريع استجابة البوت
+CACHED_DRIVERS = []     # قائمة الكباتن للبحث السريع
+LAST_CACHE_SYNC = datetime.min
 
-# ==================== 🗄️ قاعدة البيانات ====================
-async def init_db():
-    print("🔄 جاري محاولة الاتصال بـ Supabase...")
+# إعداد السجل (Logging)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+# ==================== 🗄️ 2. قاعدة البيانات ====================
+
+def get_db_connection():
     try:
-        conn = await asyncpg.connect(DB_URL, ssl=False, timeout=15)
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                chat_id BIGINT,
-                role TEXT,
-                name TEXT,
-                phone TEXT,
-                car_info TEXT,
-                lat DOUBLE PRECISION DEFAULT 0.0,
-                lon DOUBLE PRECISION DEFAULT 0.0,
-                debt DOUBLE PRECISION DEFAULT 0.0,
-                is_blocked BOOLEAN DEFAULT FALSE,
-                is_verified BOOLEAN DEFAULT FALSE,
-                photo_license TEXT,
-                photo_car TEXT,
-                photo_id_card TEXT,
-                total_trips INTEGER DEFAULT 0,
-                rating DOUBLE PRECISION DEFAULT 5.0,
-                current_trip_id TEXT
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS trips (
-                trip_id TEXT PRIMARY KEY,
-                rider_id BIGINT,
-                driver_id BIGINT,
-                pickup_lat DOUBLE PRECISION,
-                pickup_lon DOUBLE PRECISION,
-                dest_desc TEXT,
-                price DOUBLE PRECISION DEFAULT 0.0,
-                status TEXT,
-                created_at TIMESTAMP,
-                completed_at TIMESTAMP
-            )
-        ''')
-        print("✅ Database Connected (Supabase PostgreSQL) Ready.")
+        conn = psycopg2.connect(DB_URL)
+        return conn
     except Exception as e:
-        print(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
-    finally:
-        await conn.close()
+        print(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
+        return None
 
-# ==================== 🛠️ مساعدات ====================
+def init_db():
+    """إنشاء الجداول وتحديث الأعمدة الناقصة"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        with conn.cursor() as cur:
+            # إنشاء الجدول الأساسي
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    chat_id BIGINT,
+                    role TEXT,
+                    name TEXT,
+                    phone TEXT,
+                    car_info TEXT,
+                    districts TEXT,
+                    lat FLOAT DEFAULT 0.0,
+                    lon FLOAT DEFAULT 0.0,
+                    is_blocked BOOLEAN DEFAULT FALSE,
+                    is_verified BOOLEAN DEFAULT FALSE,
+                    subscription_expiry TIMESTAMPTZ,
+                    balance FLOAT DEFAULT 0.0
+                );
+            """)
+            # التأكد من وجود عمود الرصيد (للتحديثات القديمة)
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance FLOAT DEFAULT 0.0;")
+            conn.commit()
+            print("✅ قاعدة البيانات جاهزة.")
+    except Exception as e:
+        print(f"❌ خطأ في تهيئة قاعدة البيانات: {e}")
+    finally:
+        conn.close()
+
+# ==================== 🛠️ 3. دوال مساعدة ====================
+
 class UserRole(str, Enum):
     RIDER = "rider"
     DRIVER = "driver"
 
-class TripStatus(str, Enum):
-    PENDING = "pending"
-    ACCEPTED = "accepted"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+def get_distance(lat1, lon1, lat2, lon2):
+    """حساب المسافة بين نقطتين (Haversine Formula)"""
+    if any(v is None for v in [lat1, lon1, lat2, lon2]):
+        return 999999
+    try:
+        lon1, lat1, lon2, lat2 = map(radians, [float(lon1), float(lat1), float(lon2), float(lat2)])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        return 6371 * 2 * asin(sqrt(a))
+    except (ValueError, TypeError):
+        return 999999
 
-def haversine(lat1, lon1, lat2, lon2):
-    if not lat1 or not lat2: return 9999
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) * math.sin(dlat / 2) +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-         math.sin(dlon / 2) * math.sin(dlon / 2))
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+async def sync_all_users():
+    """تحديث الذاكرة المؤقتة من قاعدة البيانات"""
+    global USER_CACHE, CACHED_DRIVERS, LAST_CACHE_SYNC
+    if (datetime.now() - LAST_CACHE_SYNC).total_seconds() < 120:
+        return
+
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM users")
+            all_users = cur.fetchall()
+
+            USER_CACHE = {u['user_id']: u for u in all_users}
+            CACHED_DRIVERS = [u for u in all_users if u['role'] == 'driver']
+
+            LAST_CACHE_SYNC = datetime.now()
+            # print(f"⚡ تم تحديث الذاكرة: {len(CACHED_DRIVERS)} كابتن.")
+    finally:
+        conn.close()
 
 def get_main_kb(role, is_verified=True):
-    if role == UserRole.DRIVER:
+    """لوحة المفاتيح الرئيسية حسب الرتبة"""
+    if role == "driver":
         if not is_verified:
-            return ReplyKeyboardMarkup([[KeyboardButton("ℹ️ حالة الحساب: قيد المراجعة")]], resize_keyboard=True)
+            return ReplyKeyboardMarkup([[KeyboardButton("⏳ الحساب قيد المراجعة")]], resize_keyboard=True)
         return ReplyKeyboardMarkup([
-            [KeyboardButton("📍 تحديث موقعي (بحث)"), KeyboardButton("💰 محفظتي")],
-            [KeyboardButton("🛑 حالة العمل: متاح"), KeyboardButton("ℹ️ مساعدة")]
-        ], resize_keyboard=True)
-    else:
-        return ReplyKeyboardMarkup([
-            [KeyboardButton("🚖 طلب رحلة"), KeyboardButton("📍 موقعي")],
-            [KeyboardButton("📜 سجل الرحلات"), KeyboardButton("ℹ️ مساعدة")]
+            [KeyboardButton("📍 تحديث موقعي"), KeyboardButton("📝 تحديث الأحياء")],
+            [KeyboardButton("💰 محفظتي"), KeyboardButton("ℹ️ حالة اشتراكي")]
         ], resize_keyboard=True)
 
-# لوحة مفاتيح خاصة أثناء الرحلة (لتسهيل إرسال الموقع)
-def get_trip_kb():
+    # للراكب
     return ReplyKeyboardMarkup([
-        [KeyboardButton("📍 إرسال موقعي للطرف الآخر", request_location=True)],
-        [KeyboardButton("💬 إنهاء الرحلة")]
+        [KeyboardButton("🚖 طلب رحلة"), KeyboardButton("📍 موقعي")],
+        [KeyboardButton("💰 محفظتي")]
     ], resize_keyboard=True)
 
-# ==================== 🚀 المنطق الرئيسي ====================
+# ==================== 🤖 4. المعالجات (Handlers) ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        user = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
-        
-        if user:
-            if user['is_blocked']:
-                await update.message.reply_text("⛔ حسابك محظور.")
-                return
-            
-            # إذا كان المستخدم في رحلة حالياً، نعيد له أزرار الرحلة
-            if user['current_trip_id']:
-                await update.message.reply_text(f"👋 أهلاً {user['name']}، لديك رحلة نشطة.", reply_markup=get_trip_kb())
-            else:
-                verified = user['is_verified'] if user['role'] == 'driver' else True
-                await update.message.reply_text(f"👋 أهلاً {user['name']}", reply_markup=get_main_kb(user['role'], verified))
-        else:
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("👤 أنا راكب", callback_data="reg_rider")],
-                [InlineKeyboardButton("🚗 أنا سائق", callback_data="reg_driver")]
-            ])
-            await update.message.reply_text("👋 مرحباً بك.\nاختر نوع الحساب:", reply_markup=kb)
-    finally:
-        await conn.close()
+    first_name = update.effective_user.first_name
 
+    # محاولة الجلب من الكاش أولاً
+    await sync_all_users()
+    user = USER_CACHE.get(user_id)
+
+    if user:
+        role_name = "الكابتن" if user['role'] == 'driver' else "الراكب"
+        status_icon = "✅ موثق" if user['is_verified'] else "⏳ قيد المراجعة"
+        welcome_text = (
+            f"👋 أهلاً بك مجدداً، {role_name} **{user['name']}**\n"
+            f"🛡️ الحالة: {status_icon}\n"
+            "─────────────────\n"
+            "🚀 استخدم القائمة بالأسفل للتحكم."
+        )
+        await update.message.reply_text(welcome_text, reply_markup=get_main_kb(user['role'], user['is_verified']), parse_mode=ParseMode.MARKDOWN)
+    else:
+        welcome_new = (
+            f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل الذكي!\n\n"
+            "يرجى اختيار نوع الحساب للتسجيل:"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
+             InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
+        ])
+        await update.message.reply_text(welcome_new, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+# --- التسجيل ---
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    role = UserRole.RIDER if query.data == "reg_rider" else UserRole.DRIVER
+
+    role = "rider" if query.data == "reg_rider" else "driver"
     context.user_data['reg_role'] = role
     context.user_data['state'] = 'WAIT_NAME'
-    await query.edit_message_text(f"📝 تسجيل {'راكب' if role == 'rider' else 'سائق'}.\nالاسم الثلاثي:")
 
-# --- معالج الرسائل العام ---
-async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    role_text = "كابتن (سائق)" if role == "driver" else "راكب (عميل)"
+    msg = f"✅ اخترت: **{role_text}**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن:"
+
+    await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
+
+async def complete_registration(update, context, name):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    role = context.user_data.get('reg_role')
+    phone = context.user_data.get('reg_phone', '000000')
+    car = context.user_data.get('reg_car', None)
+
+    conn = get_db_connection()
+    if not conn: return
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            is_verified = True if role == 'rider' else False
+
+            cur.execute("""
+                INSERT INTO users (user_id, chat_id, role, name, phone, car_info, is_verified)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    phone = EXCLUDED.phone,
+                    car_info = EXCLUDED.car_info,
+                    role = EXCLUDED.role,
+                    is_verified = EXCLUDED.is_verified
+                RETURNING *;
+            """, (user_id, chat_id, role, name, phone, car, is_verified))
+            conn.commit()
+
+            # تحديث الذاكرة
+            await sync_all_users()
+
+        context.user_data.clear()
+
+        if role == 'driver':
+            await update.message.reply_text(
+                f"✅ شكراً لك يا كابتن {name}.\nطلبك قيد المراجعة، سيتم إشعارك عند التفعيل.",
+                reply_markup=get_main_kb('driver', False)
+            )
+            # تنبيه الأدمن
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
+                 InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
+            ])
+            for aid in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(chat_id=aid, text=f"🔔 **تسجيل كابتن جديد**\nالاسم: {name}\nالسيارة: {car}", reply_markup=kb)
+                except: pass
+        else:
+            await update.message.reply_text(
+                f"🎉 أهلاً بك {name}، تم تفعيل حسابك كراكب.",
+                reply_markup=get_main_kb('rider', True)
+            )
+
+    except Exception as e:
+        print(f"Error registration: {e}")
+        await update.message.reply_text("حدث خطأ، حاول لاحقاً.")
+    finally:
+        conn.close()
+
+# --- طلب الرحلات ---
+
+async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ كابتن نخبة (بحث بالحي)", callback_data="order_by_district")],
+        [InlineKeyboardButton("🌍 أقرب كابتن (بحث بالموقع)", callback_data="order_general")]
+    ])
+    await update.message.reply_text("🚖 **كيف تود البحث عن الكابتن؟**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إرسال الطلب للكباتن القريبين"""
+    r_lat = context.user_data.get('lat')
+    r_lon = context.user_data.get('lon')
+
+    # إذا لم يكن في الكاش، خذ من الرسالة الحالية
+    if update.message.location:
+        r_lat = update.message.location.latitude
+        r_lon = update.message.location.longitude
+
+    if not r_lat:
+        await update.message.reply_text("📍 لم يتم تحديد الموقع!")
+        return
+
+    price = context.user_data.get('order_price', 0)
+    district = context.user_data.get('search_district', "موقع GPS")
+
+    count = 0
+    await sync_all_users()
+
+    for d in CACHED_DRIVERS:
+        # تجاهل من ليس لديه موقع
+        if not d.get('lat'): continue
+
+        dist = get_distance(r_lat, r_lon, d['lat'], d['lon'])
+
+        if dist <= 50: # نطاق 50 كم
+            warning = ""
+            if not d.get('is_verified') or d.get('balance', 0) <= -50:
+                warning = "\n⚠️ **تنبيه:** يجب تسديد العمولة بعد الرحلة."
+
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ قبول الرحلة", callback_data=f"accept_gen_{update.effective_user.id}_{price}")
+            ]])
+
+            try:
+                await context.bot.send_message(
+                    chat_id=d['user_id'],
+                    text=f"🚖 **طلب رحلة جديد!**\n📍 الحي: {district}\n💰 السعر: {price} ريال\n 📏 البعد: {dist:.1f} كم{warning}",
+                    reply_markup=kb,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                count += 1
+            except: continue
+
+    await update.message.reply_text(f"📡 تم إرسال طلبك لـ {count} كابتن قريب.")
+
+# --- المعالج الشامل (Global Handler) ---
+
+async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
     text = update.message.text
+    user_id = update.effective_user.id
     state = context.user_data.get('state')
 
-    # 1. التحقق أولاً: هل المستخدم في رحلة نشطة؟
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        active_trip = await conn.fetchrow(
-            "SELECT * FROM trips WHERE status='accepted' AND (rider_id=$1 OR driver_id=$2)", 
-            user_id, user_id
-        )
-    finally:
-        await conn.close()
-
-    if active_trip:
-        # إذا كان النص هو أمر إنهاء الرحلة
-        if text in ["/end", "انهاء", "تم", "💬 إنهاء الرحلة"]:
-             await manual_complete_trip(update, context)
-        # إذا كان مجرد حديث أو موقع، يتم تحويله للطرف الآخر
-        else: 
-            await relay_chat_message(update, context, active_trip)
-        return
-
-    # 2. منطق التسجيل
+    # 1. معالجة خطوات التسجيل المتسلسلة
     if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
-        if context.user_data['reg_role'] == UserRole.RIDER:
-            await finalize_registration(update, context) 
-        else:
-            await update.message.reply_text("📱 رقم الهاتف للتواصل:")
-            context.user_data['state'] = 'WAIT_PHONE'
+        await update.message.reply_text("📱 **الآن أرسل رقم جوالك:**")
+        context.user_data['state'] = 'WAIT_PHONE'
         return
 
-    elif state == 'WAIT_PHONE':
+    if state == 'WAIT_PHONE':
         context.user_data['reg_phone'] = text
-        await update.message.reply_text("🚘 نوع وموديل ولون السيارة:")
-        context.user_data['state'] = 'WAIT_CAR'
-        return
-
-    elif state == 'WAIT_CAR':
-        context.user_data['reg_car'] = text
-        await update.message.reply_text("📸 **مطلوب التوثيق**\nالرجاء إرسال **صورة رخصة القيادة** الآن:")
-        context.user_data['state'] = 'WAIT_PHOTO_LICENSE'
-        return
-
-    elif state in ['WAIT_PHOTO_LICENSE', 'WAIT_PHOTO_CAR', 'WAIT_PHOTO_ID']:
-        if not update.message.photo:
-            await update.message.reply_text("⚠️ الرجاء إرسال صورة فقط.")
-            return
-        
-        photo_id = update.message.photo[-1].file_id 
-        
-        if state == 'WAIT_PHOTO_LICENSE':
-            context.user_data['photo_license'] = photo_id
-            await update.message.reply_text("📸 الآن أرسل **صورة السيارة** من الخارج:")
-            context.user_data['state'] = 'WAIT_PHOTO_CAR'
-            
-        elif state == 'WAIT_PHOTO_CAR':
-            context.user_data['photo_car'] = photo_id
-            await update.message.reply_text("📸 أخيراً، أرسل **صورة الهوية الشخصية**:")
-            context.user_data['state'] = 'WAIT_PHOTO_ID'
-            
-        elif state == 'WAIT_PHOTO_ID':
-            context.user_data['photo_id_card'] = photo_id
-            await update.message.reply_text("⏳ **تم استلام طلبك!**\nجاري مراجعة البيانات من قبل الإدارة. سيتم إشعارك عند التفعيل.")
-            await finalize_registration_driver(update, context)
-        return
-
-    # 3. طلب الرحلات
-    if state == 'WAIT_DESTINATION':
-        context.user_data['dest_desc'] = text
-        await update.message.reply_text("💰 **السعر المقترح (ريال)؟**")
-        context.user_data['state'] = 'WAIT_PRICE'
-        return
-    elif state == 'WAIT_PRICE':
-        try:
-            price = float(text)
-            if price < 5: return await update.message.reply_text("⚠️ السعر قليل.")
-            await process_trip_request(update, context, price)
-        except ValueError:
-            await update.message.reply_text("❌ أرقام فقط.")
-        return
-
-    # الأوامر العامة
-    if text == "🚖 طلب رحلة":
-        await update.message.reply_text("📍 شارك موقعك:", reply_markup=ReplyKeyboardMarkup([[KeyboardButton("📍 إرسال الموقع", request_location=True)]], resize_keyboard=True, one_time_keyboard=True))
-        context.user_data['expect_location'] = 'pickup'
-    elif text and "تحديث موقعي" in text:
-        await update.message.reply_text("📍 تحديث الموقع:", reply_markup=ReplyKeyboardMarkup([[KeyboardButton("📍 تحديث", request_location=True)]], resize_keyboard=True, one_time_keyboard=True))
-        context.user_data['expect_location'] = 'update'
-    elif text == "💰 محفظتي":
-        await show_balance(update, context)
-
-# --- إنهاء التسجيل ---
-async def finalize_registration(update, context): 
-    uid = update.effective_user.id
-    name = context.user_data['reg_name']
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        await conn.execute("""
-            INSERT INTO users (user_id, chat_id, role, name, is_verified)
-            VALUES ($1, $2, 'rider', $3, TRUE)
-            ON CONFLICT (user_id) DO UPDATE 
-            SET name = EXCLUDED.name, chat_id = EXCLUDED.chat_id
-        """, uid, update.effective_chat.id, name)
-    finally:
-        await conn.close()
-        
-    context.user_data.clear()
-    await update.message.reply_text("✅ تم التسجيل.", reply_markup=get_main_kb(UserRole.RIDER))
-
-async def finalize_registration_driver(update, context): 
-    uid = update.effective_user.id
-    d = context.user_data
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        await conn.execute("""
-            INSERT INTO users (user_id, chat_id, role, name, phone, car_info, photo_license, photo_car, photo_id_card, is_verified)
-            VALUES ($1, $2, 'driver', $3, $4, $5, $6, $7, $8, FALSE)
-            ON CONFLICT (user_id) DO UPDATE 
-            SET name = EXCLUDED.name, phone = EXCLUDED.phone, car_info = EXCLUDED.car_info
-        """, uid, update.effective_chat.id, d['reg_name'], d['reg_phone'], d['reg_car'], 
-              d['photo_license'], d['photo_car'], d['photo_id_card'])
-    finally:
-        await conn.close()
-    
-    msg = f"🚨 **طلب توثيق سائق جديد**\n👤 الاسم: {d['reg_name']}\n🆔 UserID: `{uid}`"
-    media = [
-        InputMediaPhoto(d['photo_license'], caption="الرخصة"),
-        InputMediaPhoto(d['photo_car'], caption="السيارة"),
-        InputMediaPhoto(d['photo_id_card'], caption="الهوية")
-    ]
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ قبول وتفعيل", callback_data=f"verify_ok_{uid}")],
-        [InlineKeyboardButton("❌ رفض وحظر", callback_data=f"verify_no_{uid}")]
-    ])
-
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_media_group(chat_id=admin_id, media=media)
-            await context.bot.send_message(chat_id=admin_id, text=msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            print(f"⚠️ فشل الإرسال للأدمن {admin_id}: {e}")
-    context.user_data.clear()
-
-# ==================== 👮 أدمن: معالجة التوثيق ====================
-
-async def admin_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    action, target_id = query.data.split("_")[1], int(query.data.split("_")[2])
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        if action == "ok":
-            await conn.execute("UPDATE users SET is_verified=TRUE, is_blocked=FALSE WHERE user_id=$1", target_id)
-            await query.edit_message_text(f"✅ تم تفعيل السائق {target_id}")
-            
-            row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", target_id)
-            if row: 
-                await context.bot.send_message(row['chat_id'], "🎉 **مبروك!** تم توثيق حسابك بنجاح.", reply_markup=get_main_kb(UserRole.DRIVER, True))
+        role = context.user_data.get('reg_role')
+        if role == 'driver':
+            await update.message.reply_text("🚗 **أخيراً، ما هو نوع وموديل سيارتك؟**\n(مثال: كامري 2020)")
+            context.user_data['state'] = 'WAIT_CAR'
         else:
-            await conn.execute("UPDATE users SET is_verified=FALSE, is_blocked=TRUE WHERE user_id=$1", target_id)
-            await query.edit_message_text(f"❌ تم رفض وحظر السائق {target_id}")
-            
-            row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", target_id)
-            if row: await context.bot.send_message(row['chat_id'], "❌ نأسف، تم رفض طلبك.")
-    finally:
-        await conn.close()
+            await complete_registration(update, context, context.user_data['reg_name'])
+            context.user_data['state'] = None
+        return
 
-# ==================== 📍 معالج الموقع والدردشة ====================
+    if state == 'WAIT_CAR':
+        context.user_data['reg_car'] = text
+        await complete_registration(update, context, context.user_data['reg_name'])
+        context.user_data['state'] = None
+        return
+
+    # 2. أوامر القائمة الرئيسية
+    if text == "🚖 طلب رحلة":
+        await order_ride_options(update, context)
+        return
+
+    if text == "📍 تحديث موقعي":
+        msg = await update.message.reply_text("📍 أرسل موقعك الحالي (Location) من المشبك 📎")
+        return
+
+    if text == "💰 محفظتي":
+        user = USER_CACHE.get(user_id)
+        bal = user.get('balance', 0) if user else 0
+        await update.message.reply_text(f"💳 رصيدك الحالي: {bal} ريال")
+        return
+
+    if text == "📝 تحديث الأحياء":
+        await update.message.reply_text("✍️ أرسل أسماء الأحياء التي تعمل بها مفصولة بفواصل:")
+        context.user_data['state'] = 'WAIT_DISTRICTS'
+        return
+
+    if text == "ℹ️ حالة اشتراكي":
+        user = USER_CACHE.get(user_id)
+        if user and user.get('subscription_expiry'):
+             expiry = user['subscription_expiry'].strftime('%Y-%m-%d')
+             await update.message.reply_text(f"📅 اشتراكك ينتهي في: {expiry}")
+        else:
+             await update.message.reply_text("❌ ليس لديك اشتراك فعال.")
+        return
+
+    # 3. معالجة حالات الطلب والبحث
+    if state == 'WAIT_DISTRICTS':
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (text, user_id))
+            conn.commit()
+        await sync_all_users()
+        await update.message.reply_text("✅ تم تحديث الأحياء.")
+        context.user_data['state'] = None
+        return
+
+    if state == 'WAIT_ELITE_DISTRICT':
+        # بحث نصي في الأحياء
+        found = []
+        for d in CACHED_DRIVERS:
+            if d.get('districts') and text in d['districts']:
+                found.append(d)
+
+        if not found:
+            await update.message.reply_text("❌ لا يوجد كابتن في هذا الحي حالياً.")
+        else:
+            for d in found:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("📞 طلب", url=f"tg://user?id={d['user_id']}") ]])
+                await update.message.reply_text(f"👤 الكابتن: {d['name']}\n🚗 {d['car_info']}", reply_markup=kb)
+        context.user_data['state'] = None
+        return
+
+    if state == 'WAIT_GENERAL_DISTRICT':
+        context.user_data['search_district'] = text
+        await update.message.reply_text("💰 **كم السعر المعروض؟** (أرقام فقط)")
+        context.user_data['state'] = 'WAIT_GENERAL_PRICE'
+        return
+
+    if state == 'WAIT_GENERAL_PRICE':
+        try:
+            context.user_data['order_price'] = float(text)
+            kb = ReplyKeyboardMarkup([[KeyboardButton("📍 مشاركة موقعي", request_location=True)]], one_time_keyboard=True, resize_keyboard=True)
+            await update.message.reply_text("📍 الآن شارك موقعك لإرسال الطلب:", reply_markup=kb)
+            context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER'
+        except:
+            await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
+        return
+
+# --- معالجة المواقع (Location) ---
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    lat, lon = update.message.location.latitude, update.message.location.longitude
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        # 1. تحديث موقع المستخدم دائماً
-        await conn.execute("UPDATE users SET lat=$1, lon=$2 WHERE user_id=$3", lat, lon, user_id)
-        user = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
-        
-        # 2. 🔥 التحقق الهام: هل المستخدم في رحلة نشطة؟
-        # إذا كان في رحلة، نرسل الموقع للطرف الآخر بدلاً من معالجة منطق البحث
-        if user['current_trip_id']:
-            trip = await conn.fetchrow("SELECT * FROM trips WHERE trip_id=$1", user['current_trip_id'])
-            if trip:
-                await relay_chat_message(update, context, trip)
-                return # نتوقف هنا ولا نكمل منطق البحث
-    finally:
-        await conn.close()
+    lat = update.message.location.latitude
+    lon = update.message.location.longitude
+    state = context.user_data.get('state')
 
-    # إذا كان تسجيل طلب جديد (راكب)
-    if context.user_data.get('expect_location') == 'pickup':
-        context.user_data['pickup_coords'] = (lat, lon)
-        context.user_data['state'] = 'WAIT_DESTINATION'
-        context.user_data['expect_location'] = None
-        await update.message.reply_text("📝 إلى أين؟", reply_markup=ReplyKeyboardRemove())
-        return
+    # تحديث الموقع في كل الحالات
+    context.user_data['lat'] = lat
+    context.user_data['lon'] = lon
 
-    # منطق السائق (البحث عن طلبات)
-    if user['role'] == UserRole.DRIVER:
-        if not user['is_verified']:
-            await update.message.reply_text("⏳ حسابك قيد المراجعة.")
-            return
-        if user['is_blocked'] or user['debt'] >= DEBT_LIMIT:
-            await update.message.reply_text("❌ حسابك موقوف (ديون أو حظر).")
-            return
-        
-        # البحث عن طلبات
-        conn = await asyncpg.connect(DB_URL)
+    # تحديث في قاعدة البيانات (يمكن جعله غير متزامن لتخفيف الضغط)
+    threading.Thread(target=update_db_location, args=(user_id, lat, lon)).start()
+
+    # إذا كان الغرض هو طلب رحلة
+    if state == 'WAIT_LOCATION_FOR_ORDER':
+        await broadcast_general_order(update, context)
+        context.user_data['state'] = None
+        # إعادة الكيبورد الأصلي
+        await update.message.reply_text("✅ تم الإرسال.", reply_markup=get_main_kb("rider", True))
+    else:
+        await update.message.reply_text("✅ تم تحديث إحداثياتك بنجاح.")
+
+def update_db_location(uid, lat, lon):
+    conn = get_db_connection()
+    if conn:
         try:
-            pending = await conn.fetch("SELECT * FROM trips WHERE status=$1", TripStatus.PENDING)
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET lat=%s, lon=%s WHERE user_id=%s", (lat, lon, uid))
+                conn.commit()
         finally:
-            await conn.close()
-        
-        found = 0
-        for trip in pending:
-            dist = haversine(lat, lon, trip['pickup_lat'], trip['pickup_lon'])
-            if dist <= SEARCH_RADIUS:
-                found += 1
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ قبول ({trip['price']} ريال)", callback_data=f"accept_{trip['trip_id']}")]])
-                msg = f"🔔 **طلب!**\n📍 {trip['dest_desc']}\n💰 {trip['price']} ريال\n📏 {dist:.1f} كم"
-                await update.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        
-        if found == 0: await update.message.reply_text("✅ تم التحديث. لا توجد طلبات قريبة.")
-        context.user_data['expect_location'] = None
+            conn.close()
 
-async def process_trip_request(update, context, price):
-    rider_id = update.effective_user.id
-    pickup = context.user_data['pickup_coords']
-    dest = context.user_data['dest_desc']
-    trip_id = str(uuid.uuid4())[:8]
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        await conn.execute("""
-            INSERT INTO trips (trip_id, rider_id, pickup_lat, pickup_lon, dest_desc, price, status, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        """, trip_id, rider_id, pickup[0], pickup[1], dest, price, TripStatus.PENDING, datetime.now())
-    finally:
-        await conn.close()
-    
-    admin_msg = f"🆕 طلب رحلة جديد:\n💰 السعر: {price} ريال\n📍 الوجهة: {dest}\n🆔 آيدي الراكب: `{rider_id}`"
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_message(admin_id, admin_msg)
-        except:
-            continue
-    context.user_data.clear()
-    await update.message.reply_text("✅ تم النشر. جاري البحث عن كابتن...", reply_markup=get_main_kb(UserRole.RIDER))
-    await broadcast_trip_to_drivers(context, trip_id, pickup, dest, price)
+# --- معالجة الأزرار (Callbacks) ---
 
-async def broadcast_trip_to_drivers(context, trip_id, pickup, dest, price):
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        # 🔥 التحقق هنا أيضاً: لا نرسل للسائقين المشغولين
-        drivers = await conn.fetch("""
-            SELECT * FROM users 
-            WHERE role=$1 AND is_blocked=FALSE AND is_verified=TRUE AND debt < $2 
-            AND (current_trip_id IS NULL OR current_trip_id = '')
-        """, UserRole.DRIVER, DEBT_LIMIT)
-    finally:
-        await conn.close()
-            
-    for driver in drivers:
-        dist = haversine(pickup[0], pickup[1], driver['lat'], driver['lon'])
-        if dist <= SEARCH_RADIUS:
-            try:
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ قبول ({price})", callback_data=f"accept_{trip_id}")]])
-                await context.bot.send_message(driver['chat_id'], f"🔔 **طلب!**\n📍 {dest}\n💰 {price}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-            except: pass
-
-async def accept_trip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    trip_id = query.data.split("_")[1]
-    driver_id = query.from_user.id
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        # التحقق من بيانات السائق
-        u = await conn.fetchrow("SELECT is_verified, current_trip_id FROM users WHERE user_id=$1", driver_id)
-        if not u or not u['is_verified']:
-            await query.answer("❌ حسابك غير موثق.", show_alert=True)
-            return
-        
-        # 🔥 التعديل الهام: منع السائق من قبول أكثر من رحلة
-        if u['current_trip_id']:
-            await query.answer("⚠️ لديك رحلة حالية بالفعل! لا يمكنك قبول رحلة أخرى.", show_alert=True)
-            return
-
-        trip = await conn.fetchrow("SELECT * FROM trips WHERE trip_id=$1", trip_id)
-        if not trip or trip['status'] != TripStatus.PENDING:
-            await query.answer("❌ راحت عليك! الرحلة أخذها كابتن غيرك.", show_alert=True)
-            await query.edit_message_text("❌ انتهى العرض.")
-            return
-
-        # إتمام القبول
-        await conn.execute("UPDATE trips SET driver_id=$1, status=$2 WHERE trip_id=$3", driver_id, TripStatus.ACCEPTED, trip_id)
-        await conn.execute("UPDATE users SET current_trip_id=$1 WHERE user_id IN ($2, $3)", trip_id, driver_id, trip['rider_id'])
-        
-        rider = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", trip['rider_id'])
-        driver = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", driver_id)
-    finally:
-        await conn.close()
-
+    data = query.data
+    user_id = update.effective_user.id
     await query.answer()
-    
-    # 🔥 نرسل للسائق والراكب لوحة مفاتيح جديدة تحتوي على زر إرسال الموقع
-    await context.bot.send_message(
-        driver['chat_id'], 
-        f"✅ قبلت الرحلة.\n👤 الراكب: {rider['name']}\n📞 هاتف: {rider.get('phone', 'غير متوفر')}\n📍 الوجهة: {trip['dest_desc']}\n\nيمكنك الآن إرسال موقعك للراكب:", 
-        reply_markup=get_trip_kb()
-    )
-    
-    await context.bot.send_message(
-        rider['chat_id'], 
-        f"🚗 السائق قادم!\n👤 الكابتن: {driver['name']}\n🚘 السيارة: {driver['car_info']}\n📞 هاتف: {driver['phone']}\n\nيمكنك إرسال موقعك للكابتن:", 
-        reply_markup=get_trip_kb()
-    )
 
-async def end_trip_callback(update, context): 
-    await perform_trip_completion(context, update.callback_query.data.split("_")[1])
-    await update.callback_query.answer()
+    if data == "order_by_district":
+        await query.edit_message_text("✍️ اكتب اسم الحي للبحث:")
+        context.user_data['state'] = 'WAIT_ELITE_DISTRICT'
 
-async def manual_complete_trip(update, context):
-    user_id = update.effective_user.id
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        row = await conn.fetchrow("SELECT trip_id FROM trips WHERE status='accepted' AND (driver_id=$1 OR rider_id=$2)", user_id, user_id)
-        if row: await perform_trip_completion(context, row['trip_id'])
-    finally:
-        await conn.close()
+    elif data == "order_general":
+        await query.edit_message_text("✍️ في أي حي تتواجد الآن؟")
+        context.user_data['state'] = 'WAIT_GENERAL_DISTRICT'
 
-async def perform_trip_completion(context, trip_id):
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        trip = await conn.fetchrow("SELECT * FROM trips WHERE trip_id=$1", trip_id)
-        if not trip: return
-        
-        commission = trip['price'] * COMMISSION_RATE
-        await conn.execute("UPDATE trips SET status=$1, completed_at=$2 WHERE trip_id=$3", TripStatus.COMPLETED, datetime.now(), trip_id)
-        await conn.execute("UPDATE users SET current_trip_id=NULL WHERE user_id IN ($1, $2)", trip['driver_id'], trip['rider_id'])
-        await conn.execute("UPDATE users SET debt = debt + $1, total_trips = total_trips + 1 WHERE user_id=$2", commission, trip['driver_id'])
-        
-        users = await conn.fetch("SELECT user_id, chat_id FROM users WHERE user_id IN ($1, $2)", trip['driver_id'], trip['rider_id'])
-    finally:
-        await conn.close()
-            
-    await notify_admin(context, f"✅ رحلة انتهت: {trip_id}\n💰 عمولة: {commission:.2f}")
-    for u in users:
+    elif data.startswith("accept_gen_"):
+        parts = data.split("_")
+        rider_id = int(parts[2])
+        price = float(parts[3])
+        driver_id = user_id
+
+        # خصم العمولة (مثال 10%)
+        commission = price * 0.10
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
+            conn.commit()
+        conn.close()
+
+        # إشعار الطرفين
+        driver_info = USER_CACHE.get(driver_id)
+        d_name = driver_info['name'] if driver_info else "الكابتن"
+
+        await context.bot.send_message(
+            chat_id=rider_id,
+            text=f"🎉 **تم قبول طلبك!**\n👤 الكابتن: {d_name}\n[تواصل معه هنا](tg://user?id={driver_id})",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await query.edit_message_text(f"✅ قبلت الرحلة. تم خصم {commission} ريال.\n[تواصل مع العميل](tg://user?id={rider_id})", parse_mode=ParseMode.MARKDOWN)
+
+    elif data.startswith("verify_"):
+        action, uid = data.split("_")[1], int(data.split("_")[2])
+        is_verified = True if action == "ok" else False
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET is_verified = %s, is_blocked = %s WHERE user_id = %s", (is_verified, not is_verified, uid))
+            conn.commit()
+        conn.close()
+
+        msg_user = "✅ تم توثيق حسابك!" if is_verified else "❌ نعتذر، تم رفض طلبك."
         try:
-            msg = f"🏁 شكراً لك.\nالسعر: {trip['price']}"
-            if u['user_id'] == trip['driver_id']: msg += f"\nالعمولة المخصومة: {commission:.2f}"
-            role = UserRole.DRIVER if u['user_id'] == trip['driver_id'] else UserRole.RIDER
-            await context.bot.send_message(u['chat_id'], msg, reply_markup=get_main_kb(role, True))
+            await context.bot.send_message(chat_id=uid, text=msg_user)
         except: pass
 
-async def relay_chat_message(update, context, trip):
-    sender_id = update.effective_user.id
-    receiver_id = trip['rider_id'] if sender_id == trip['driver_id'] else trip['driver_id']
-    conn = await asyncpg.connect(DB_URL)
+        await query.edit_message_text(f"تم {action} المستخدم {uid}")
+
+# --- أوامر الأدمن ---
+
+async def admin_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تفعيل اشتراك: /sub ID DAYS"""
+    if update.effective_user.id not in ADMIN_IDS: return
     try:
-        row = await conn.fetchrow("SELECT chat_id FROM users WHERE user_id=$1", receiver_id)
-        if row:
-            try:
-                role = "🚖 الكابتن" if sender_id == trip['driver_id'] else "👤 الراكب"
-                # 🔥 دعم إرسال الموقع والرسائل
-                if update.message.location:
-                    await context.bot.send_message(row['chat_id'], f"📍 {role} شارك موقعه المباشر معك:")
-                    await context.bot.send_location(row['chat_id'], update.message.location.latitude, update.message.location.longitude)
-                elif update.message.text: 
-                    await context.bot.send_message(row['chat_id'], f"💬 {role}: {update.message.text}")
-            except: pass
-    finally:
-        await conn.close()
+        uid = int(context.args[0])
+        days = int(context.args[1])
 
-async def show_balance(update, context):
-    user_id = update.effective_user.id
-    conn = await asyncpg.connect(DB_URL)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE users SET subscription_expiry = NOW() + INTERVAL '{days} days', is_verified=TRUE WHERE user_id = %s", (uid,))
+            conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ تم تفعيل {days} يوم للعضو {uid}")
+        await context.bot.send_message(uid, f"🎉 تم تفعيل اشتراكك لمدة {days} يوم.")
+    except:
+        await update.message.reply_text("❌ خطأ: /sub [ID] [Days]")
+
+async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إضافة رصيد: /cash ID AMOUNT"""
+    if update.effective_user.id not in ADMIN_IDS: return
     try:
-        d = await conn.fetchrow("SELECT debt FROM users WHERE user_id=$1", user_id)
-    finally:
-        await conn.close()
-    if d: await update.message.reply_text(f"💰 المحفظة:\nعليك: {d['debt']:.2f} ريال\nالحد: {DEBT_LIMIT}")
+        uid = int(context.args[0])
+        amount = float(context.args[1])
 
-async def notify_admin(context, msg):
-    for admin_id in ADMIN_IDS:
-        try: await context.bot.send_message(admin_id, msg)
-        except: pass
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, uid))
+            conn.commit()
+        conn.close()
 
-async def admin_help(update, context):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text("👮 /debts, /block [id], /unblock [id], /reset [id], /bc [msg]")
+        await update.message.reply_text(f"✅ تم إضافة {amount} ريال.")
+        await context.bot.send_message(uid, f"💰 تم شحن رصيدك بـ {amount} ريال.")
+    except:
+        await update.message.reply_text("❌ خطأ: /cash [ID] [Amount]")
+async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """مراقب القروبات - يبحث عن طلبات التوصيل ويرد بالكباتن المتوفرين"""
+    if not update.message or not update.message.text: return
 
-async def admin_debts_list(update, context):
-    if not is_admin(update.effective_user.id): return
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        drivers = await conn.fetch("SELECT name, debt, phone FROM users WHERE role='driver' AND debt>0")
-    finally:
-        await conn.close()
-    msg = "📊 الديون:\n" + "\n".join([f"{d['name']} ({d['phone']}): {d['debt']}" for d in drivers])
-    await update.message.reply_text(msg if drivers else "لا يوجد ديون")
+    # تنظيف النص للبحث
+    text = update.message.text.lower()
+    msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-async def admin_actions(update, context):
-    if not is_admin(update.effective_user.id): return
-    cmd = update.message.text.split()[0]
-    if not context.args: return await update.message.reply_text("Id required")
-    tid = int(context.args[0])
-    
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        if "/reset" in cmd: await conn.execute("UPDATE users SET debt=0 WHERE user_id=$1", tid)
-        elif "/block" in cmd: await conn.execute("UPDATE users SET is_blocked=TRUE WHERE user_id=$1", tid)
-        elif "/unblock" in cmd: await conn.execute("UPDATE users SET is_blocked=FALSE WHERE user_id=$1", tid)
-    finally:
-        await conn.close()
-    await update.message.reply_text("✅ Done")
+    # 1. التأكد من وجود كلمة مفتاحية (مشوار، توصيل.. إلخ)
+    if not any(k in msg_clean for k in KEYWORDS): return
 
-async def admin_broadcast(update, context):
-    if not is_admin(update.effective_user.id): return
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        ids = await conn.fetch("SELECT chat_id FROM users")
-    finally:
-        await conn.close()
-    for i in ids: 
-        try: await context.bot.send_message(i['chat_id'], "📢 " + " ".join(context.args))
-        except: pass
-    await update.message.reply_text("✅ Sent")
+    # 2. تحديث قائمة الكباتن من الذاكرة
+    await sync_all_users()
 
-# ==================== 🏁 التشغيل النهائي الموحد ====================
+    matched_drivers = []
+    found_district = ""
 
-async def post_init(application: Application):
-    """تهيئة قاعدة البيانات عند بدء تشغيل البوت"""
-    await init_db()
+    # 3. البحث عن حي مذكور في الرسالة يطابق أحياء الكباتن
+    for d in CACHED_DRIVERS:
+        if not d.get('districts'): continue
+        districts_list = d['districts'].replace("،", ",").split(",")
+        for dist in districts_list:
+            clean_dist = dist.strip().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+            if len(clean_dist) > 2 and clean_dist in msg_clean:
+                if d not in matched_drivers:
+                    matched_drivers.append(d)
+                found_district = dist.strip()
+
+    # 4. إذا وجدنا كباتن، نرسل الرد في المجموعة
+    if matched_drivers:
+        keyboard = []
+        for d in matched_drivers[:5]: # عرض أول 5 كباتن فقط
+            row = [
+                InlineKeyboardButton(f"👤 {d['name']}", url=f"tg://user?id={d['user_id']}"),
+                InlineKeyboardButton("🚖 اطلب الكابتن", url=f"tg://user?id={d['user_id']}")
+            ]
+            keyboard.append(row)
+
+        await update.message.reply_text(
+            f"✅ **كباتن متوفرين في حي {found_district}:**",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+# ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
+
+app = Flask('')
+@app.route('/')
+def home(): return "Bot is Running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+# ==================== 🏁 6. التشغيل الرئيسي ====================
 
 def main():
-    # 1. تشغيل السيرفر الوهمي لخداع Render
-    keep_alive()
-    
-    # 2. إعداد التوكن وبناء التطبيق
-    BOT_TOKEN = "8588537913:AAE9KFLiemKBD5N-zhCF3tjTqfCseXVbcaY"
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
+    # 1. تشغيل السيرفر
+    threading.Thread(target=run_flask, daemon=True).start()
 
-    # 3. تسجيل جميع المعالجات
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("admin", admin_help))
-    app.add_handler(CommandHandler("debts", admin_debts_list))
-    app.add_handler(CommandHandler("bc", admin_broadcast))
-    app.add_handler(CommandHandler(["block", "unblock", "reset"], admin_actions))
+    # 2. تهيئة القاعدة
+    init_db()
 
-    # معالجة الصور، المواقع، والنصوص
-    # لاحظ أننا وضعنا معالج الموقع (Location) هنا ليعالج إرسال الموقع في الشات
-    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
-    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, global_message_handler))
+    # 3. إعداد البوت
+    print("🚀 البوت يعمل الآن...")
+    application = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(True).build()
 
-    app.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
-    app.add_handler(CallbackQueryHandler(admin_verify_callback, pattern="^verify_"))
-    app.add_handler(CallbackQueryHandler(accept_trip_callback, pattern="^accept_"))
-    app.add_handler(CallbackQueryHandler(end_trip_callback, pattern="^end_"))
+    # Handlers Registration
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("sub", admin_add_days))
+    application.add_handler(CommandHandler("cash", admin_cash))
 
-    print("🚀 البوت بدأ العمل الآن بنسخة واحدة مستقرة...")
-    
-    app.run_polling(drop_pending_updates=True)
+    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
+    application.add_handler(CallbackQueryHandler(handle_callbacks))
+
+    application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
+
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
+
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_handler))
+
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("🛑 تم الإيقاف.")
