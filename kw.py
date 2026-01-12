@@ -682,7 +682,7 @@ def main():
 
     # 4. بناء التطبيق
     application = ApplicationBuilder() \
-        .token("BOT_TOKEN") \
+        .token(BOT_TOKEN) \
         .request(request_config) \
         .build()
 
