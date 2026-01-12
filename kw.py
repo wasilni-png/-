@@ -6,6 +6,7 @@ import threading
 import os
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
+from enum import Enum
 
 # مكتبات Flask والويب
 from flask import Flask
