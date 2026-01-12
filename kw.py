@@ -557,26 +557,73 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(uid, f"💰 تم شحن رصيدك بـ {amount} ريال.")
     except:
         await update.message.reply_text("❌ خطأ: /cash [ID] [Amount]")
-async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مراقب القروبات - يبحث عن طلبات التوصيل ويرد بالكباتن المتوفرين"""
-    if not update.message or not update.message.text: return
 
-    # تنظيف النص للبحث
+async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
+    
     text = update.message.text.lower()
     msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-    # 1. التأكد من وجود كلمة مفتاحية (مشوار، توصيل.. إلخ)
+    # 1. فحص الكلمات الممنوعة (مثل: شهري)
+    FORBIDDEN_KEYWORDS = ["شهري", "عقد", "استئجار"]
+    
+    if any(k in msg_clean for k in FORBIDDEN_KEYWORDS):
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # أ- حذف الرسالة من القروب فوراً
+        try:
+            await update.message.delete()
+        except Exception as e:
+            print(f"خطأ في حذف الرسالة: {e}") # قد يحتاج البوت صلاحيات مشرف
+
+        # ب- إرسال تنبيه للعضو في القروب
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"عذراً {user.first_name}، العروض الشهرية تُرسل للإدارة للمراجعة. تم تحويل طلبك للآدمن."
+        )
+
+        # ج- تحويل الطلب للآدمن (أنت)
+        ADMIN_ID = 123456789  # استبدله بـ آيدي حسابك الحقيقي
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"⚠️ **طلب مشوار شهري جديد:**\n\n"
+                 f"👤 من: {user.first_name} (@{user.username})\n"
+                 f"📝 النص: {update.message.text}\n"
+                 f"📍 المصدر: {chat.title}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return # التوقف هنا وعدم إكمال البحث عن كباتن
+
+    # 2. الكلمات المفتاحية العادية (تكملة الكود السابق)
+    KEYWORDS = ["توصيل", "مشوار", "سواق"]
     if not any(k in msg_clean for k in KEYWORDS): return
 
-    # 2. تحديث قائمة الكباتن من الذاكرة
-    await sync_all_users()
+    # ... باقي كود البحث عن الكباتن وإرسال التنبيهات ...
 
+    # 1. التحقق من أن الرسالة نصية ومن مجموعة
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text.lower()
+    # تنظيف النص لضمان دقة البحث (توحيد التاء المربوطة والهمزات)
+    msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+
+    # 2. الكلمات التي إذا وجدت يبدأ البوت بالبحث
+    KEYWORDS = ["توصيل", "مشوار", "مطلوب", "سواق", "كابتن"]
+    if not any(k in msg_clean for k in KEYWORDS):
+        return
+
+    # 3. تحديث قائمة الكباتن من قاعدة البيانات (لضمان الدقة)
+    await sync_all_users() 
+    
     matched_drivers = []
     found_district = ""
 
-    # 3. البحث عن حي مذكور في الرسالة يطابق أحياء الكباتن
+    # 4. البحث عن مطابقة بين كلمات الرسالة وأحياء الكباتن
     for d in CACHED_DRIVERS:
         if not d.get('districts'): continue
+        # تقسيم الأحياء المسجلة للكابتن (سواء بفاصلة عربية أو إنجليزية)
         districts_list = d['districts'].replace("،", ",").split(",")
         for dist in districts_list:
             clean_dist = dist.strip().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
@@ -585,18 +632,29 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     matched_drivers.append(d)
                 found_district = dist.strip()
 
-    # 4. إذا وجدنا كباتن، نرسل الرد في المجموعة
+    # 5. إذا وجدنا كباتن لهذا الحي
     if matched_drivers:
+        # أ: إشعار خاص للكباتن (الميزة التي طلبتها)
+        for d in matched_drivers:
+            try:
+                await context.bot.send_message(
+                    chat_id=d['user_id'],
+                    text=f"🔔 **تنبيه من المجموعات:**\nيوجد طلب في حي ({found_district}) الآن. كن مستعداً!",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except:
+                pass # تجاهل إذا كان السائق قد حظر البوت
+
+        # ب: الرد في المجموعة بقائمة الكباتن
         keyboard = []
-        for d in matched_drivers[:5]: # عرض أول 5 كباتن فقط
-            row = [
+        for d in matched_drivers[:5]: # عرض أول 5 فقط لتجنب طول الرسالة
+            keyboard.append([
                 InlineKeyboardButton(f"👤 {d['name']}", url=f"tg://user?id={d['user_id']}"),
                 InlineKeyboardButton("🚖 اطلب الكابتن", url=f"tg://user?id={d['user_id']}")
-            ]
-            keyboard.append(row)
-
+            ])
+        
         await update.message.reply_text(
-            f"✅ **كباتن متوفرين في حي {found_district}:**",
+            f"✅ **تم العثور على كباتن في حي {found_district}:**\nيمكنك التواصل معهم مباشرة عبر الروابط أدناه:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
@@ -641,6 +699,10 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
 
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
+
+application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
+
+application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_handler))
 
