@@ -584,7 +584,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         # ج- تحويل الطلب للآدمن (أنت)
-        ADMIN_ID = 123456789  # استبدله بـ آيدي حسابك الحقيقي
+        ADMIN_ID = 7996171713  # استبدله بـ آيدي حسابك الحقيقي
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"⚠️ **طلب مشوار شهري جديد:**\n\n"
