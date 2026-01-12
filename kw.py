@@ -42,7 +42,8 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from telegram.constants import ParseMode
-
+from telegram.ext import ApplicationBuilder, Application
+from telegram.request import HTTPXRequest
 # ==================== ⚙️ 1. الإعدادات ====================
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
@@ -620,7 +621,13 @@ def main():
 
     # 3. إعداد البوت
     print("🚀 البوت يعمل الآن...")
-    application = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(True).build()
+    request_config = HTTPXRequest(connect_timeout=20, read_timeout=20)
+
+    # 2. بناء التطبيق مع الإعدادات الجديدة
+    application = ApplicationBuilder() \
+        .token("TOKEN_HERE") \
+        .request(request_config) \
+        .build()
 
     # Handlers Registration
     application.add_handler(CommandHandler("start", start_command))
