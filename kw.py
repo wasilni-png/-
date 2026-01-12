@@ -585,7 +585,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # ج- تحويل الطلب للآدمن (أنت)
         for admin in ADMIN_IDS:
-    try:
+        try:
         await context.bot.send_message(
             chat_id=admin, 
             text=f"⚠️ **طلب مشوار شهري جديد:**\n\n"
