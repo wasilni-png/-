@@ -34,8 +34,12 @@ app = Flask('')
 def home():
     return "Bot is alive! 🚀"
 
+ # تأكد من وجود هذا الاستيراد في أعلى الملف
+
 def run_flask():
+    # جلب المنفذ من ريندر، وإذا لم يوجد يستخدم 8080 كاحتياطي
     port = int(os.environ.get("PORT", 8080))
+    # host='0.0.0.0' ضرورية جداً ليتمكن ريندر من رؤية السيرفر
     app.run(host='0.0.0.0', port=port)
 
 
