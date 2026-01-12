@@ -1,4 +1,4 @@
-python-telegram-bot==20.8
-asyncpg
-httpx
-Flask
+python-telegram-bot
+psycopg2-binary
+flask
+geopy
