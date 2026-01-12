@@ -659,7 +659,6 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
-
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
 
 app = Flask('')
