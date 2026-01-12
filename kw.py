@@ -584,21 +584,21 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         # ج- تحويل الطلب للآدمن (أنت)
-        for admin in ADMIN_IDS:
+            # تحويل الطلب لجميع الآدمنز المسجلين
+    for admin in ADMIN_IDS:
         try:
-        await context.bot.send_message(
-            chat_id=admin, 
-            text=f"⚠️ **طلب مشوار شهري جديد:**\n\n"
-                 f"👤 من: {user.first_name} (@{user.username})\n"
-                 f"📝 النص: {update.message.text}\n"
-                 f"📍 المصدر: {chat.title}",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return # التوقف هنا وعدم إكمال البحث عن كباتن
+            await context.bot.send_message(
+                chat_id=admin, 
+                text=f"⚠️ **طلب مشوار شهري جديد:**\n\n"
+                     f"👤 من: {user.first_name} (@{user.username if user.username else 'لا يوجد'})\n"
+                     f"📝 النص: {update.message.text}\n"
+                     f"📍 المصدر: {chat.title}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            print(f"❌ تعذر الإرسال للآدمن {admin}: {e}")
 
-    # 2. الكلمات المفتاحية العادية (تكملة الكود السابق)
-    KEYWORDS = ["توصيل", "مشوار", "سواق"]
-    if not any(k in msg_clean for k in KEYWORDS): return
+    return  # التوقف هنا (خارج حلقة for) لضمان عدم إكمال البحث عن كباتن
 
     # ... باقي كود البحث عن الكباتن وإرسال التنبيهات ...
 
