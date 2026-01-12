@@ -3,30 +3,12 @@
 
 import logging
 import threading
+import os
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
-from enum import Enum
 
-# مكتبات Flask
-import os
+# مكتبات Flask والويب
 from flask import Flask
-import threading
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot is alive! 🚀"
-
-def run_flask():
-    # ريندر يمرر المنفذ عبر متغير البيئة PORT
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# في دالة main، استدعِ run_flask في خيط منفصل
-def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-    # ... بقية إعدادات البوت هنا ...
 
 # مكتبات قاعدة البيانات
 import psycopg2
@@ -42,8 +24,20 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, Application
 from telegram.request import HTTPXRequest
+
+# إعداد السيرفر لـ Render
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive! 🚀"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+
 # ==================== ⚙️ 1. الإعدادات ====================
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
@@ -65,6 +59,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # ==================== 🗄️ 2. قاعدة البيانات ====================
 
