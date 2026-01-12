@@ -707,3 +707,6 @@ def main():
     # 5. تشغيل البوت مع تنظيف التحديثات العالقة
     print("🚀 البوت يعمل الآن بكامل طاقته...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
+
+if __name__ == '__main__':
+    main()
