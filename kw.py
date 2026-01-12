@@ -29,8 +29,7 @@ from telegram.constants import ParseMode
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8132714296:AAHPP-HsTIteeygaHGCliixcaoE0-OPC7vc"
-
+BOT_TOKEN = "7963641334:AAFGrBWHA9shQiulMW_CliIwa5xWi1mHq8I"
 # آيدي المشرفين
 ADMIN_IDS = [8563113166, 7996171713]
 
