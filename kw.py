@@ -671,44 +671,43 @@ def run_flask():
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 
 def main():
-    # 1. تشغيل السيرفر
+    # 1. تشغيل السيرفر (Flask) لضمان بقاء البوت حياً على Render
     threading.Thread(target=run_flask, daemon=True).start()
 
-    # 2. تهيئة القاعدة
+    # 2. تهيئة قاعدة البيانات
     init_db()
 
-    # 3. إعداد البوت
-    print("🚀 البوت يعمل الآن...")
+    # 3. إعداد طلبات HTTP بمهلة أطول لتجنب أخطاء الشبكة
     request_config = HTTPXRequest(connect_timeout=20, read_timeout=20)
 
-    # 2. بناء التطبيق مع الإعدادات الجديدة
+    # 4. بناء التطبيق
     application = ApplicationBuilder() \
         .token("TOKEN_HERE") \
         .request(request_config) \
         .build()
 
-    # Handlers Registration
+    # --- تسجيل الـ Handlers (الترتيب مهم جداً!) ---
+
+    # أ- الأوامر النصية (Commands)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sub", admin_add_days))
     application.add_handler(CommandHandler("cash", admin_cash))
 
+    # ب- أزرار التحكم (Callbacks)
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
 
+    # ج- الموقع الجغرافي
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+
+    # د- مراقب المجموعات (يجب أن يكون قبل الـ Private)
+    # هذا سيتعامل مع "الطلبات الشهرية" و "البحث عن أحياء" في آن واحد
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
 
+    # هـ- المحادثات الخاصة (Private)
+    # هذا سيتعامل مع عمليات التسجيل وتحديث البيانات في الخاص
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
 
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
-
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_handler))
-
+    # 5. تشغيل البوت مع تنظيف التحديثات العالقة
+    print("🚀 البوت يعمل الآن بكامل طاقته...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
-
-if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("🛑 تم الإيقاف.")
