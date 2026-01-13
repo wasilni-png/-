@@ -26,7 +26,8 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 from telegram.request import HTTPXRequest
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import MessageHandler, filters, ContextTypes
 # إعداد السيرفر لـ Render
 app = Flask('')
 
@@ -166,6 +167,31 @@ def get_main_kb(role, is_verified=True):
     ], resize_keyboard=True)
 
 # ==================== 🤖 4. المعالجات (Handlers) ====================
+
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # التحقق من وجود أعضاء جدد في الرسالة
+    for new_member in update.message.new_chat_members:
+        # إذا كان العضو الجديد هو البوت نفسه، لا يرسل ترحيب (اختياري)
+        if new_member.id == context.bot.id:
+            continue
+            
+        first_name = new_member.first_name
+        welcome_text = (
+            f"يا هلا وغلا بك يا {first_name} في قروبنا! ✨\n\n"
+            "نورتنا في منصة التوصيل الذكية 🚖\n"
+            "إذا كنت **كابتن** وتبغى تسجل معنا، ارسل كلمة (تسجيل) في الخاص.\n"
+            "إذا كنت **عميل** وتبغى مشوار، بس اكتب (مطلوب مشوار في حي ...) والشباب ما يقصرون معك."
+        )
+
+        # إضافة أزرار تحت رسالة الترحيب (اختياري)
+        keyboard = [
+            [InlineKeyboardButton("شرح طريقة الاستخدام 📖", url="https://t.me/YourBotUsername?start=help")],
+            [InlineKeyboardButton("قناة التنبيهات 📢", url="https://t.me/YourChannel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # إرسال الرسالة
+        await update.message.reply_text(text=welcome_text, reply_markup=reply_markup)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -692,6 +718,7 @@ def main():
 
     # أ- الأوامر النصية (Commands)
     application.add_handler(CommandHandler("start", start_command))
+
     application.add_handler(CommandHandler("sub", admin_add_days))
     application.add_handler(CommandHandler("cash", admin_cash))
 
@@ -710,6 +737,9 @@ def main():
     # هذا سيتعامل مع عمليات التسجيل وتحديث البيانات في الخاص
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
 
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+
+    
     # 5. تشغيل البوت مع تنظيف التحديثات العالقة
     print("🚀 البوت يعمل الآن بكامل طاقته...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
