@@ -557,7 +557,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=query.message.chat_id,
                 text=f"❌ نعتذر، لا يوجد كابتن متوفر حالياً في حي ({selected_dist})."
             )
-    else:
+else:
             # بناء قائمة الأزرار في رسالة واحدة
             keyboard = []
             for d in found[:8]: # عرض أول 8 كباتن فقط
