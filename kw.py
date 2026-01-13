@@ -497,6 +497,14 @@ def update_db_location(uid, lat, lon):
                 conn.commit()
         finally:
             conn.close()
+# دالة لحذف الرسالة بعد وقت محدد
+async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    try:
+        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
+    except Exception as e:
+        print(f"Error deleting message: {e}")
+
 
 # --- معالجة الأزرار (Callbacks) ---
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -579,7 +587,29 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
         conn.close()
 
-        await context.bot.send_message(chat_id=rider_id, text=f"🎉 تم قبول طلبك من قبل الكابتن! [تواصل معه](tg://user?id={user_id})", parse_mode=ParseMode.MARKDOWN)
+                else:
+            # بناء قائمة الأزرار
+            keyboard = []
+            for d in found[:8]:
+                btn_label = f"🚖 {d['name']} - ({d['car_info']})"
+                keyboard.append([InlineKeyboardButton(btn_label, url=f"tg://user?id={d['user_id']}")])
+
+            # 1️⃣ إرسال الرسالة وتخزينها في متغير
+            sent_msg = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\n(تختفي هذه الرسالة تلقائياً بعد 5 دقائق)",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+            # 2️⃣ جدولة حذف الرسالة بعد 300 ثانية (5 دقائق)
+            context.job_queue.run_once(
+                delete_message_job, 
+                when=300, 
+                data=sent_msg.message_id, 
+                chat_id=query.message.chat_id
+            )
+
         await query.edit_message_text(f"✅ قبلت الرحلة. خصم عمولة: {commission} ريال.")
 
     # 6. توثيق السائقين (للآدمن)
