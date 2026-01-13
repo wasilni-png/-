@@ -186,7 +186,7 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # إضافة أزرار تحت رسالة الترحيب (اختياري)
         keyboard = [
             [InlineKeyboardButton("شرح طريقة الاستخدام 📖", url="https://t.me/YourBotUsername?start=help")],
-            [InlineKeyboardButton("قناة التنبيهات 📢", url="https://t.me/YourChannel")]
+            [InlineKeyboardButton("قناة التنبيهات 📢", url="https://t.me/mishwarii")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
