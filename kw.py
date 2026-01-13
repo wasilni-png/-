@@ -502,8 +502,59 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await query.answer()
 
+        # ابحث عن هذا الجزء داخل handle_callbacks وحدثه:
     if data == "order_by_district":
-        await query.edit_message_text("✍️ اكتب اسم الحي للبحث:")
+        keyboard = []
+        # عرض المدن كأزرار
+        for city in CITIES_DISTRICTS.keys():
+            keyboard.append([InlineKeyboardButton(city, callback_data=f"city_{city}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("📍 اختر المدينة للبحث عن كابتن:", reply_markup=reply_markup)
+
+    # أضف هذا الجزء الجديد تماماً للتعامل مع اختيار المدينة والأحياء:
+    elif data.startswith("city_"):
+        city_name = data.split("_")[1]
+        districts = CITIES_DISTRICTS.get(city_name, [])
+        
+        keyboard = []
+        # تقسيم الأحياء في صفوف (كل صف فيه حيين) لتكون منظمة
+        for i in range(0, len(districts), 2):
+            row = [InlineKeyboardButton(districts[i], callback_data=f"search_dist_{districts[i]}")]
+            if i + 1 < len(districts):
+                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"search_dist_{districts[i+1]}"))
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع للمدن", callback_data="order_by_district")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"🏙️ أحياء {city_name} المتاحة:\nاختر الحي المطلوب:", reply_markup=reply_markup)
+
+    elif data.startswith("search_dist_"):
+        selected_dist = data.split("_")[2]
+        await sync_all_users() # تحديث البيانات
+        
+        found = []
+        # تنظيف وتحقق ذكي من الأحياء المسجلة عند الكباتن
+        for d in CACHED_DRIVERS:
+            if d.get('districts'):
+                # تنظيف النص لضمان المطابقة
+                d_districts = d['districts'].replace("،", ",").split(",")
+                if any(selected_dist.strip() in item.strip() for item in d_districts):
+                    found.append(d)
+
+        if not found:
+            await query.edit_message_text(f"❌ نعتذر، لا يوجد كابتن متوفر حالياً في حي ({selected_dist}).")
+        else:
+            await query.edit_message_text(f"✅ تم العثور على {len(found)} كابتن في {selected_dist}:")
+            for d in found:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("📞 اطلب الآن", url=f"tg://user?id={d['user_id']}")]])
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=f"👤 **الاسم:** {d['name']}\n🚗 **السيارة:** {d['car_info']}\n📱 **الجوال:** {d['phone']}",
+                    reply_markup=kb,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+
         context.user_data['state'] = 'WAIT_ELITE_DISTRICT'
 
     elif data == "order_general":
