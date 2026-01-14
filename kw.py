@@ -730,36 +730,45 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⚙️ تم تحديث حالة المستخدم {uid}")
 
     # موافقة الراكب على فتح الدردشة
+        # موافقة الراكب على فتح الدردشة
     elif data.startswith("chat_confirm_yes_"):
         driver_id = int(data.split("_")[3])
         rider_id = user_id
 
-        # الآن نبدأ الجلسة فعلياً
+        # 1. بدء الجلسة في قاعدة البيانات
         start_chat_session(driver_id, rider_id)
         
+        # 2. جلب بيانات الطرفين للإشعار (من الكاش)
+        driver_info = USER_CACHE.get(driver_id, {"name": "غير معروف"})
+        rider_info = USER_CACHE.get(rider_id, {"name": "غير معروف"})
+
+        # 3. إرسال إشعار فوري للأدمن (أنت)
+        admin_alert = (
+            f"🚨 **تنبيه أمني: بدء محادثة جديدة**\n\n"
+            f"👤 **الراكب:** {rider_info.get('name')}\n"
+            f"🆔 آيدي الراكب: `{rider_id}`\n"
+            f"─────────────────\n"
+            f"🚖 **الكابتن:** {driver_info.get('name')}\n"
+            f"🆔 آيدي الكابتن: `{driver_id}`\n\n"
+            f"📜 لمراقبة المحادثة استخدم: `/logs {rider_id} {driver_id}`"
+        )
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id, 
+                    text=admin_alert, 
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                print(f"خطأ في إرسال تنبيه الأدمن: {e}")
+
+        # 4. إكمال تدفق الدردشة للطرفين
         kb_end = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+        await query.edit_message_text("✅ تم فتح الدردشة بنجاح.")
+        await context.bot.send_message(chat_id=rider_id, text="بدأت المحادثة مع الكابتن..", reply_markup=kb_end)
+        await context.bot.send_message(chat_id=driver_id, text="🎉 وافق العميل على فتح الدردشة!", reply_markup=kb_end)
 
-        await query.edit_message_text("✅ تم فتح الدردشة. يمكنك الآن إرسال التفاصيل للكابتن مباشرة.")
-        await context.bot.send_message(chat_id=rider_id, text="بدأت المحادثة..", reply_markup=kb_end)
-        
-        # إشعار الكابتن
-        await context.bot.send_message(
-            chat_id=driver_id, 
-            text="🎉 وافق العميل على فتح الدردشة! يمكنك الآن التواصل معه.",
-            reply_markup=kb_end
-        )
-
-    # رفض الراكب للدردشة
-    elif data.startswith("chat_confirm_no_"):
-        driver_id = int(data.split("_")[3])
-        
-        await query.edit_message_text("❌ تم رفض طلب الدردشة وإلغاء العرض.")
-        
-        # إشعار الكابتن بالرفض
-        await context.bot.send_message(
-            chat_id=driver_id,
-            text="😔 نعتذر، العميل رفض فتح الدردشة حالياً."
-        )
 
 
 
