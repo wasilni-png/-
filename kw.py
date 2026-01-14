@@ -25,6 +25,7 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from telegram.constants import ParseMode
+from telegram.ext import ApplicationHandlerStop
 from telegram.request import HTTPXRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import MessageHandler, filters, ContextTypes
@@ -48,7 +49,7 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "7963641334:AAFGrBWHA9shQiulMW_CliIwa5xWi1mHq8I"
+BOT_TOKEN = "8531219319:AAFZREyQum0t85NtVlaxw3PPrkW_4D_8iaU"
 # آيدي المشرفين
 ADMIN_IDS = [8563113166, 7996171713]
 
@@ -94,6 +95,19 @@ def init_db():
     try:
         with conn.cursor() as cur:
             # إنشاء الجدول الأساسي
+
+            # إنشاء جدول سجلات الدردشة
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_logs (
+                    log_id SERIAL PRIMARY KEY,
+                    sender_id BIGINT,
+                    receiver_id BIGINT,
+                    message_content TEXT,
+                    msg_type TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -114,6 +128,18 @@ def init_db():
             # التأكد من وجود عمود الرصيد (للتحديثات القديمة)
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance FLOAT DEFAULT 0.0;")
             conn.commit()
+            # ... (بعد إنشاء جدول users)
+            
+            # إنشاء جدول المحادثات النشطة
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS active_chats (
+                    user_id BIGINT PRIMARY KEY,
+                    partner_id BIGINT,
+                    start_time TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            conn.commit()
+
             print("✅ قاعدة البيانات جاهزة.")
     except Exception as e:
         print(f"❌ خطأ في تهيئة قاعدة البيانات: {e}")
@@ -159,6 +185,55 @@ async def sync_all_users():
             # print(f"⚡ تم تحديث الذاكرة: {len(CACHED_DRIVERS)} كابتن.")
     finally:
         conn.close()
+# --- دوال الدردشة الوسيطة ---
+
+def start_chat_session(user1_id, user2_id):
+    """ربط مستخدمين ببعضهما في محادثة"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        with conn.cursor() as cur:
+            # مسح أي محادثات سابقة لهما
+            cur.execute("DELETE FROM active_chats WHERE user_id IN (%s, %s)", (user1_id, user2_id))
+            # إنشاء ارتباط مزدوج (كل واحد يعرف من شريكه)
+            cur.execute("INSERT INTO active_chats (user_id, partner_id) VALUES (%s, %s), (%s, %s)", 
+                        (user1_id, user2_id, user2_id, user1_id))
+            conn.commit()
+    finally:
+        conn.close()
+
+def end_chat_session(user_id):
+    """إنهاء المحادثة وحذف الارتباط"""
+    conn = get_db_connection()
+    partner_id = None
+    if not conn: return None
+    try:
+        with conn.cursor() as cur:
+            # معرفة الطرف الآخر لإبلاغه
+            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
+            res = cur.fetchone()
+            if res:
+                partner_id = res[0]
+            
+            # حذف السجلات للطرفين
+            cur.execute("DELETE FROM active_chats WHERE user_id = %s OR partner_id = %s", (user_id, user_id))
+            conn.commit()
+    finally:
+        conn.close()
+    return partner_id
+
+def get_chat_partner(user_id):
+    """جلب آيدي الطرف الآخر في المحادثة"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
+            res = cur.fetchone()
+            return res[0] if res else None
+    finally:
+        conn.close()
+
 
 def get_main_kb(role, is_verified=True):
     """لوحة المفاتيح الرئيسية حسب الرتبة"""
@@ -184,7 +259,7 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # إذا كان العضو الجديد هو البوت نفسه، لا يرسل ترحيب (اختياري)
         if new_member.id == context.bot.id:
             continue
-            
+
         first_name = new_member.first_name
         welcome_text = (
             f"يا هلا وغلا بك يا {first_name} في قروبنا! ✨\n\n"
@@ -359,6 +434,30 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
             except: continue
 
     await update.message.reply_text(f"📡 تم إرسال طلبك لـ {count} كابتن قريب.")
+
+async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    partner_id = end_chat_session(user_id)
+    
+    # إعادة الكيبورد الرئيسي حسب الرتبة
+    await sync_all_users()
+    user = USER_CACHE.get(user_id)
+    role = user['role'] if user else 'rider'
+    main_kb = get_main_kb(role, True)
+
+    await update.message.reply_text("🛑 تم إنهاء المحادثة.", reply_markup=main_kb)
+    
+    if partner_id:
+        try:
+            p_user = USER_CACHE.get(partner_id)
+            p_role = p_user['role'] if p_user else 'rider'
+            await context.bot.send_message(
+                chat_id=partner_id, 
+                text="🛑 قام الطرف الآخر بإنهاء الرحلة/المحادثة.",
+                reply_markup=get_main_kb(p_role, True)
+            )
+        except: pass
+
 
 # --- المعالج الشامل (Global Handler) ---
 
@@ -537,7 +636,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. عرض الكباتن (الميزة المطلوبة: رسالة واحدة بجميع الأزرار)
     elif data.startswith("search_dist_"):
         selected_dist = data.split("_")[2]
-        
+
         # حذف قائمة الأحياء فوراً لتنظيف القروب
         try:
             await query.message.delete()
@@ -557,12 +656,13 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=query.message.chat_id,
                 text=f"❌ نعتذر، لا يوجد كابتن متوفر حالياً في حي ({selected_dist})."
             )
-else:
+        else:
             # بناء قائمة الأزرار في رسالة واحدة
             keyboard = []
             for d in found[:8]: # عرض أول 8 كباتن فقط
                 btn_label = f"🚖 {d['name']} - ({d['car_info']})"
-                keyboard.append([InlineKeyboardButton(btn_label, url=f"tg://user?id={d['user_id']}")])
+                # ابحث عن هذا السطر داخل handle_callbacks وقم بتغييره:
+keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"start_chat_{d['user_id']}")])
 
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -576,16 +676,44 @@ else:
         await query.edit_message_text("✍️ في أي حي تتواجد الآن؟")
         context.user_data['state'] = 'WAIT_GENERAL_DISTRICT'
 
-    # 5. قبول الرحلة وخصم العمولة
+      # ... داخل handle_callbacks ...
     elif data.startswith("accept_gen_"):
         parts = data.split("_")
         rider_id, price = int(parts[2]), float(parts[3])
+        driver_id = user_id
+
+        # خصم العمولة
         commission = price * 0.10
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, user_id))
+            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
             conn.commit()
         conn.close()
+
+        # 🚀 بدء جلسة الدردشة
+        start_chat_session(driver_id, rider_id)
+
+        # رسالة ترحيب للطرفين
+        kb_end = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+        
+        # للكابتن
+        await context.bot.send_message(
+            chat_id=driver_id,
+            text=f"✅ **تم قبول الرحلة!**\nالآن أنت في محادثة مباشرة مع العميل داخل البوت.\nيمكنك إرسال (موقع، صوت، نص).",
+            reply_markup=kb_end,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # للعميل
+        await context.bot.send_message(
+            chat_id=rider_id,
+            text=f"🎉 **تم قبول طلبك!**\nالكابتن الآن متصل معك.\nأرسل موقعك أو تفاصيل المشوار هنا مباشرة.",
+            reply_markup=kb_end,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        await query.edit_message_text(f"✅ بدأت الرحلة والمحادثة. العمولة: {commission} ريال.")
+
 
                 else:
             # بناء قائمة الأزرار
@@ -611,6 +739,19 @@ else:
             )
 
         await query.edit_message_text(f"✅ قبلت الرحلة. خصم عمولة: {commission} ريال.")
+
+
+    elif data.startswith("start_chat_"):
+        driver_id = int(data.split("_")[2])
+        rider_id = user_id
+        start_chat_session(rider_id, driver_id)
+        kb_end = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+        
+        await context.bot.send_message(chat_id=rider_id, text="🔄 تم فتح الدردشة.. اكتب طلبك الآن:", reply_markup=kb_end)
+        await context.bot.send_message(chat_id=driver_id, text="🔔 عميل يتواصل معك الآن.. يمكنك الرد مباشرة.", reply_markup=kb_end)
+
+
+
 
     # 6. توثيق السائقين (للآدمن)
     elif data.startswith("verify_"):
@@ -645,7 +786,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not conn:
         await update.message.reply_text("❌ فشل الاتصال بقاعدة البيانات.")
         return
-        
+
     users_list = []
     with conn.cursor() as cur:
         cur.execute("SELECT user_id FROM users")
@@ -656,7 +797,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. بدء عملية الإرسال
     success_count = 0
     block_count = 0
-    
+
     for uid in users_list:
         try:
             # إضافة جملة "تنبيه إداري" لتظهر بشكل رسمي
@@ -727,7 +868,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 1️⃣ فحص الكلمات الممنوعة (الطلبات الشهرية)
     FORBIDDEN_KEYWORDS = ["شهري", "عقد", "استئجار"]
-    
+
     if any(k in msg_clean for k in FORBIDDEN_KEYWORDS):
         try:
             await update.message.delete()
@@ -751,7 +892,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return  # يتوقف البوت هنا فقط إذا كانت الرسالة "شهرية"
     # --- داخل دالة group_order_scanner ---
     districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-    
+
     keyboard = []
     for i in range(0, len(districts), 2):
         row = [InlineKeyboardButton(districts[i], callback_data=f"search_dist_{districts[i]}")]
@@ -773,18 +914,18 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 3️⃣ البحث عن الأحياء ومطابقتها مع الكباتن
     await sync_all_users() 
-    
+
     matched_drivers = []
     found_district = ""
 
     for d in CACHED_DRIVERS:
         if not d.get('districts'): continue
-        
+
         # تنظيف قائمة أحياء الكابتن للمقارنة
         districts_list = d['districts'].replace("،", ",").split(",")
         for dist in districts_list:
             clean_dist = dist.strip().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
-            
+
             if len(clean_dist) > 2 and clean_dist in msg_clean:
                 if d not in matched_drivers:
                     matched_drivers.append(d)
@@ -823,15 +964,74 @@ async def add_fake_drivers():
         (555555, 'أبو نايف', '0505555555', 'فورد 2022', 'النرجس, العارض, القيروان', 'active')
     ]
 
-    async with db_pool.acquire() as conn:
-        for d in fake_data:
-            await conn.execute("""
-                INSERT INTO drivers (user_id, name, phone, car_info, districts, status)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (user_id) DO NOTHING
-            """, d[0], d[1], d[2], d[3], d[4], d[5])
+    
+async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS: return
+    try:
+        id1, id2 = int(context.args[0]), int(context.args[1])
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM chat_logs 
+                WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
+                ORDER BY created_at DESC LIMIT 20
+            """, (id1, id2, id2, id1))
+            logs = cur.fetchall()
+        conn.close()
+
+        if not logs:
+            await update.message.reply_text("📭 لا يوجد سجل محادثات بين هذين الطرفين.")
+            return
+
+        report = "📜 **آخر 20 رسالة بين الطرفين:**\n\n"
+        for l in reversed(logs):
+            sender = "الطرف الأول" if l['sender_id'] == id1 else "الطرف الثاني"
+            report += f"👤 {sender}: {l['message_content']}\n"
         
-    print("✅ تم إضافة 5 كباتن وهميين بنجاح لتجربة النظام!")
+        await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+    except:
+        await update.message.reply_text("❌ الاستخدام: `/logs ID1 ID2`")
+
+
+async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نقل الرسائل بين الطرفين (نص، صوت، موقع، صور)"""
+    user_id = update.effective_user.id
+    
+    # تجاهل الأوامر والرسائل في القروبات
+    if update.message.chat.type != "private" or (update.message.text and update.message.text.startswith("/")):
+        return
+
+    # فحص هل المستخدم في محادثة نشطة؟
+    partner_id = get_chat_partner(user_id)
+    
+    if not partner_id:
+        # إذا لم يكن في محادثة، دعه يكمل مع البوت بشكل طبيعي (global_handler)
+        return 
+
+    # زر لإنهاء المحادثة يظهر دائماً
+    kb = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+
+    try:
+        # استخدام copy_message لنسخ المحتوى كما هو وإرساله للطرف الآخر
+        # هذه الطريقة تدعم (Voice, Photo, Text, Location) وتحافظ على الخصوصية
+        await context.bot.copy_message(
+            chat_id=partner_id,
+            from_chat_id=user_id,
+            message_id=update.message.message_id,
+            reply_markup=kb
+        )
+        
+        # إشعار للمرسل بأن الرسالة وصلت (اختياري - يمكن إزالته لتقليل الازعاج)
+        # await update.message.reply_text("✅", disable_notification=True)
+        
+    except Exception as e:
+        await update.message.reply_text("⚠️ فشل إرسال الرسالة، ربما قام الطرف الآخر بحظر البوت أو أنهى المحادثة.")
+        # إنهاء المحادثة في حال الخطأ
+        end_chat_session(user_id)
+
+    # نوقف التنفيذ هنا لكي لا ينتقل البوت للمدقق التالي
+    raise ApplicationHandlerStop 
+
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
 
@@ -845,53 +1045,36 @@ def run_flask():
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 
 def main():
-    # 1. تشغيل السيرفر (Flask) لضمان بقاء البوت حياً على Render
     threading.Thread(target=run_flask, daemon=True).start()
-
-    # 2. تهيئة قاعدة البيانات
     init_db()
-
-    # 3. إعداد طلبات HTTP بمهلة أطول لتجنب أخطاء الشبكة
     request_config = HTTPXRequest(connect_timeout=20, read_timeout=20)
+    
+    # بناء التطبيق أولاً
+    application = ApplicationBuilder().token(BOT_TOKEN).request(request_config).build()
 
-    # 4. بناء التطبيق
-    application = ApplicationBuilder() \
-        .token(BOT_TOKEN) \
-        .request(request_config) \
-        .build()
-
-    # --- تسجيل الـ Handlers (الترتيب مهم جداً!) ---
-
-    # أ- الأوامر النصية (Commands)
+    # ثم إضافة المعالجات بالترتيب
     application.add_handler(CommandHandler("start", start_command))
-
     application.add_handler(CommandHandler("sub", admin_add_days))
     application.add_handler(CommandHandler("cash", admin_cash))
-    # أضف هذا السطر مع أوامر sub و cash
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
+    application.add_handler(CommandHandler("logs", admin_get_logs))
+    
+    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
 
+    # الدردشة الوسيطة (Group 1)
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & (filters.TEXT | filters.VOICE | filters.LOCATION | filters.PHOTO) & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
+        chat_relay_handler
+    ), group=1)
 
-    # ب- أزرار التحكم (Callbacks)
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
-
-    # ج- الموقع الجغرافي
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
-
-    # د- مراقب المجموعات (يجب أن يكون قبل الـ Private)
-    # هذا سيتعامل مع "الطلبات الشهرية" و "البحث عن أحياء" في آن واحد
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_order_scanner))
-
-    # هـ- المحادثات الخاصة (Private)
-    # هذا سيتعامل مع عمليات التسجيل وتحديث البيانات في الخاص
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler))
-
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, global_handler))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
 
-    
-    # 5. تشغيل البوت مع تنظيف التحديثات العالقة
-    print("🚀 البوت يعمل الآن بكامل طاقته...")
-    application.run_polling(drop_pending_updates=True, close_loop=False)
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
