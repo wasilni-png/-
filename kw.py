@@ -1158,7 +1158,7 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ الاستخدام: `/logs ID1 ID2`")
 
 
- async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. التحقق من صلاحية الأدمن
     if update.effective_user.id not in ADMIN_IDS:
         return
