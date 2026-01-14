@@ -129,7 +129,7 @@ def init_db():
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance FLOAT DEFAULT 0.0;")
             conn.commit()
             # ... (بعد إنشاء جدول users)
-            
+
             # إنشاء جدول المحادثات النشطة
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS active_chats (
@@ -214,7 +214,7 @@ def end_chat_session(user_id):
             res = cur.fetchone()
             if res:
                 partner_id = res[0]
-            
+
             # حذف السجلات للطرفين
             cur.execute("DELETE FROM active_chats WHERE user_id = %s OR partner_id = %s", (user_id, user_id))
             conn.commit()
@@ -438,7 +438,7 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
 async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     partner_id = end_chat_session(user_id)
-    
+
     # إعادة الكيبورد الرئيسي حسب الرتبة
     await sync_all_users()
     user = USER_CACHE.get(user_id)
@@ -446,7 +446,7 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_kb = get_main_kb(role, True)
 
     await update.message.reply_text("🛑 تم إنهاء المحادثة.", reply_markup=main_kb)
-    
+
     if partner_id:
         try:
             p_user = USER_CACHE.get(partner_id)
@@ -606,6 +606,7 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- معالجة الأزرار (Callbacks) ---
+# --- معالجة الأزرار (Callbacks) ---
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -633,8 +634,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="order_by_district")])
         await query.edit_message_text(f"🏙️ أحياء {city_name}:\nاختر الحي المطلوب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 3. عرض الكباتن (الميزة المطلوبة: رسالة واحدة بجميع الأزرار)
-        elif data.startswith("search_dist_"):
+    # 3. عرض الكباتن
+    elif data.startswith("search_dist_"):
         selected_dist = data.split("_")[2]
 
         try:
@@ -646,7 +647,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         found = []
         for d in CACHED_DRIVERS:
             if d.get('districts'):
-                # تنظيف ومطابقة الحي
                 d_districts = d['districts'].replace("،", ",").split(",")
                 if any(selected_dist.strip() in item.strip() for item in d_districts):
                     found.append(d)
@@ -657,40 +657,31 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"❌ نعتذر، لا يوجد كابتن متوفر حالياً في حي ({selected_dist})."
             )
         else:
-            # بناء قائمة الأزرار
             keyboard = []
             for d in found[:8]:
                 btn_label = f"🚖 {d['name']} - ({d['car_info']})"
                 keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"start_chat_{d['user_id']}")])
 
-            # إرسال الرسالة وجدولة حذفها
             sent_msg = await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\nاضغط على الكابتن لبدء محادثة (تختفي الرسالة بعد 5 دقائق):",
+                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\nاضغط لبدء التفاوض (تختفي الرسالة بعد 5 دقائق):",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.MARKDOWN
             )
 
-            context.job_queue.run_once(
-                delete_message_job, 
-                when=300, 
-                data=sent_msg.message_id, 
-                chat_id=query.message.chat_id
-            )
+            context.job_queue.run_once(delete_message_job, when=300, data=sent_msg.message_id, chat_id=query.message.chat_id)
 
-
-    # 4. طلب عام (بحث بالموقع)
+    # 4. طلب عام
     elif data == "order_general":
         await query.edit_message_text("✍️ في أي حي تتواجد الآن؟")
         context.user_data['state'] = 'WAIT_GENERAL_DISTRICT'
 
-      # ... داخل handle_callbacks ...
+    # 5. قبول رحلة
     elif data.startswith("accept_gen_"):
         parts = data.split("_")
         rider_id, price = int(parts[2]), float(parts[3])
         driver_id = user_id
 
-        # خصم العمولة
         commission = price * 0.10
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -698,57 +689,14 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
         conn.close()
 
-        # 🚀 بدء جلسة الدردشة
         start_chat_session(driver_id, rider_id)
-
-        # رسالة ترحيب للطرفين
         kb_end = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
         
-        # للكابتن
-        await context.bot.send_message(
-            chat_id=driver_id,
-            text=f"✅ **تم قبول الرحلة!**\nالآن أنت في محادثة مباشرة مع العميل داخل البوت.\nيمكنك إرسال (موقع، صوت، نص).",
-            reply_markup=kb_end,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        # للعميل
-        await context.bot.send_message(
-            chat_id=rider_id,
-            text=f"🎉 **تم قبول طلبك!**\nالكابتن الآن متصل معك.\nأرسل موقعك أو تفاصيل المشوار هنا مباشرة.",
-            reply_markup=kb_end,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await context.bot.send_message(chat_id=driver_id, text="✅ تم قبول الرحلة وبدأت الدردشة.", reply_markup=kb_end)
+        await context.bot.send_message(chat_id=rider_id, text="🎉 تم قبول طلبك والكابتن متصل معك الآن.", reply_markup=kb_end)
+        await query.edit_message_text(f"✅ تم القبول. العمولة: {commission} ريال.")
 
-        await query.edit_message_text(f"✅ بدأت الرحلة والمحادثة. العمولة: {commission} ريال.")
-
-
-                else:
-            # بناء قائمة الأزرار
-            keyboard = []
-            for d in found[:8]:
-                btn_label = f"🚖 {d['name']} - ({d['car_info']})"
-                keyboard.append([InlineKeyboardButton(btn_label, url=f"tg://user?id={d['user_id']}")])
-
-            # 1️⃣ إرسال الرسالة وتخزينها في متغير
-            sent_msg = await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\n(تختفي هذه الرسالة تلقائياً بعد 5 دقائق)",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-            # 2️⃣ جدولة حذف الرسالة بعد 300 ثانية (5 دقائق)
-            context.job_queue.run_once(
-                delete_message_job, 
-                when=300, 
-                data=sent_msg.message_id, 
-                chat_id=query.message.chat_id
-            )
-
-        await query.edit_message_text(f"✅ قبلت الرحلة. خصم عمولة: {commission} ريال.")
-
-
+    # 6. بدء دردشة
     elif data.startswith("start_chat_"):
         driver_id = int(data.split("_")[2])
         rider_id = user_id
@@ -758,20 +706,16 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=rider_id, text="🔄 تم فتح الدردشة.. اكتب طلبك الآن:", reply_markup=kb_end)
         await context.bot.send_message(chat_id=driver_id, text="🔔 عميل يتواصل معك الآن.. يمكنك الرد مباشرة.", reply_markup=kb_end)
 
-
-
-
-    # 6. توثيق السائقين (للآدمن)
+    # 7. التوثيق
     elif data.startswith("verify_"):
         action, uid = data.split("_")[1], int(data.split("_")[2])
         is_v = True if action == "ok" else False
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET is_verified = %s, is_blocked = %s WHERE user_id = %s", (is_v, not is_v, uid))
+            cur.execute("UPDATE users SET is_verified = %s WHERE user_id = %s", (is_v, uid))
             conn.commit()
         conn.close()
-        await query.edit_message_text(f"⚙️ تم {action} المستخدم {uid}")
-
+        await query.edit_message_text(f"⚙️ تم تحديث حالة المستخدم {uid}")
 
 
 # --- أوامر الأدمن ---
@@ -972,7 +916,7 @@ async def add_fake_drivers():
         (555555, 'أبو نايف', '0505555555', 'فورد 2022', 'النرجس, العارض, القيروان', 'active')
     ]
 
-    
+
 async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
     try:
@@ -995,7 +939,7 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for l in reversed(logs):
             sender = "الطرف الأول" if l['sender_id'] == id1 else "الطرف الثاني"
             report += f"👤 {sender}: {l['message_content']}\n"
-        
+
         await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
     except:
         await update.message.reply_text("❌ الاستخدام: `/logs ID1 ID2`")
@@ -1004,14 +948,14 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نقل الرسائل بين الطرفين (نص، صوت، موقع، صور)"""
     user_id = update.effective_user.id
-    
+
     # تجاهل الأوامر والرسائل في القروبات
     if update.message.chat.type != "private" or (update.message.text and update.message.text.startswith("/")):
         return
 
     # فحص هل المستخدم في محادثة نشطة؟
     partner_id = get_chat_partner(user_id)
-    
+
     if not partner_id:
         # إذا لم يكن في محادثة، دعه يكمل مع البوت بشكل طبيعي (global_handler)
         return 
@@ -1028,10 +972,10 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message_id=update.message.message_id,
             reply_markup=kb
         )
-        
+
         # إشعار للمرسل بأن الرسالة وصلت (اختياري - يمكن إزالته لتقليل الازعاج)
         # await update.message.reply_text("✅", disable_notification=True)
-        
+
     except Exception as e:
         await update.message.reply_text("⚠️ فشل إرسال الرسالة، ربما قام الطرف الآخر بحظر البوت أو أنهى المحادثة.")
         # إنهاء المحادثة في حال الخطأ
@@ -1056,7 +1000,7 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
     request_config = HTTPXRequest(connect_timeout=20, read_timeout=20)
-    
+
     # بناء التطبيق أولاً
     application = ApplicationBuilder().token(BOT_TOKEN).request(request_config).build()
 
@@ -1066,7 +1010,7 @@ def main():
     application.add_handler(CommandHandler("cash", admin_cash))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
     application.add_handler(CommandHandler("logs", admin_get_logs))
-    
+
     application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
 
     # الدردشة الوسيطة (Group 1)
