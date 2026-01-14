@@ -751,7 +751,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------------------------------------------------------
     # 4. اختيار كابتن محدد (بعد أن أدخل الراكب السعر وظهرت القائمة)
     # ---------------------------------------------------------
-        elif data.startswith("req_driver_"):
+    elif data.startswith("req_driver_"):
         parts = data.split("_")
         driver_id, price = int(parts[2]), float(parts[3])
         rider_id = user_id
