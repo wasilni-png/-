@@ -1176,6 +1176,47 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if conn: conn.close()
 
+async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    # تجاهل الأوامر والرسائل في المجموعات
+    if not update.message or (update.message.text and update.message.text.startswith("/")):
+        return
+
+    partner_id = get_chat_partner(user_id)
+    if not partner_id:
+        return # ليس في محادثة نشطة
+
+    # لوحة أزرار الدردشة (الموقع والإنهاء)
+    kb_chat = ReplyKeyboardMarkup([
+        [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
+        [KeyboardButton("❌ إنهاء المحادثة")]
+    ], resize_keyboard=True)
+
+    try:
+        # نقل الرسالة (سواء نص أو موقع أو صورة)
+        await context.bot.copy_message(
+            chat_id=partner_id,
+            from_chat_id=user_id,
+            message_id=update.message.message_id,
+            reply_markup=kb_chat
+        )
+        
+        # حفظ في قاعدة البيانات (السجلات)
+        msg_content = update.message.text if update.message.text else "📍 [أرسل موقعاً أو وسائط]"
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type)
+                    VALUES (%s, %s, %s, %s)
+                """, (user_id, partner_id, msg_content, update.message.type))
+                conn.commit()
+            conn.close()
+
+    except Exception as e:
+        print(f"Error in relay: {e}")
+
+
 
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
@@ -1218,6 +1259,10 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, global_handler))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+
+
+    # أضف هذا السطر هنا بالتحديد لربط الدردشة ✅
+    application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), chat_relay_handler))
 
     application.run_polling(drop_pending_updates=True)
 
