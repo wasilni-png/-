@@ -492,6 +492,49 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # ... داخل global_handler ...
 
+    # معالجة تفاصيل التوصيل
+    if state == 'WAIT_TRIP_DETAILS':
+        context.user_data['trip_details_text'] = text # حفظ نموذج التفاصيل
+        
+        await update.message.reply_text(
+            "💰 **ممتاز! أخيراً، بكم السعر الذي تعرضه لهذا الطلب؟**\n"
+            "(أدخل المبلغ بالأرقام فقط، مثال: 30)"
+        )
+        context.user_data['state'] = 'WAIT_PRICE_FOR_DISTRICT_SEARCH'
+        return
+
+    # معالجة السعر وعرض الكباتن (تعديل بسيط على الكود السابق)
+    if state == 'WAIT_PRICE_FOR_DISTRICT_SEARCH':
+        try:
+            price = float(text)
+            details = context.user_data.get('trip_details_text')
+            selected_dist = context.user_data.get('selected_district_search')
+            
+            # البحث عن كباتن
+            await sync_all_users()
+            found = [d for d in CACHED_DRIVERS if d.get('districts') and selected_dist in d['districts']]
+            
+            if not found:
+                await update.message.reply_text(f"❌ لا يوجد كباتن في {selected_dist} حالياً.")
+            else:
+                keyboard = []
+                for d in found[:8]:
+                    # نمرر السعر في الـ callback_data
+                    keyboard.append([InlineKeyboardButton(f"🚖 {d['name']} ({d['car_info']})", callback_data=f"req_driver_{d['user_id']}_{price}")])
+                
+                await update.message.reply_text(
+                    f"✅ **تم تجهيز طلبك!**\n\n"
+                    f"📋 **التفاصيل:**\n{details}\n"
+                    f"💰 **السعر:** {price} ريال\n\n"
+                    f"اختر الكابتن لإرسال العرض له:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            context.user_data['state'] = None
+        except ValueError:
+            await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط.")
+        return
+
+
     # إضافة جديدة: معالجة سعر البحث بالحي
     if state == 'WAIT_PRICE_FOR_DISTRICT_SEARCH':
         try:
@@ -686,37 +729,52 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------------------------------------------------------
     # 3. تم اختيار الحي -> طلب السعر من الراكب
     # ---------------------------------------------------------
+        # عند اختيار الحي من القائمة
     elif data.startswith("sel_dist_"):
         selected_dist = data.split("_")[2]
-        
-        # حفظ الحي المختار في ذاكرة المستخدم
         context.user_data['selected_district_search'] = selected_dist
         
-        # تغيير الحالة لانتظار إدخال السعر
-        context.user_data['state'] = 'WAIT_PRICE_FOR_DISTRICT_SEARCH'
+        # تغيير الحالة لانتظار تفاصيل التوصيل
+        context.user_data['state'] = 'WAIT_TRIP_DETAILS'
         
         await query.edit_message_text(
             f"✅ تم اختيار حي: **{selected_dist}**\n\n"
-            f"💰 **بكم تريد المشوار؟ (أدخل المبلغ بالأرقام فقط)**\n"
-            f"سيتم عرض هذا السعر للكباتن، وسيتم خصم العمولة من الكابتن بناءً عليه.",
+            "📝 **يرجى إرسال تفاصيل التوصيل بهذا النموذج:**\n"
+            "1. نوع التوصيل (شهري أم مشوار):\n"
+            "2. مكان التواجد (الحي والشارع):\n"
+            "3. الوجهة:\n"
+            "4. وقت التوصيل:\n"
+            "5. تفاصيل أخرى:",
             parse_mode=ParseMode.MARKDOWN
         )
 
     # ---------------------------------------------------------
     # 4. اختيار كابتن محدد (بعد أن أدخل الراكب السعر وظهرت القائمة)
     # ---------------------------------------------------------
-    elif data.startswith("req_driver_"):
-        # البيانات تأتي بالشكل: req_driver_{driver_id}_{price}
+        elif data.startswith("req_driver_"):
         parts = data.split("_")
-        driver_id = int(parts[2])
-        price = float(parts[3])
+        driver_id, price = int(parts[2]), float(parts[3])
         rider_id = user_id
         
-        # جلب اسم الراكب
+        # جلب التفاصيل المحفوظة
+        details = context.user_data.get('trip_details_text', 'لا يوجد تفاصيل')
         rider_name = update.effective_user.first_name
+
+        kb_accept = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ قبول ودفع العمولة", callback_data=f"accept_ride_{rider_id}_{price}"),
+             InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{rider_id}")]
+        ])
         
-        # إشعار الراكب
-        await query.edit_message_text(f"⏳ جاري إرسال الطلب للكابتن بالسعر {price} ريال...")
+        await context.bot.send_message(
+            chat_id=driver_id,
+            text=(f"🔔 **طلب مشوار خاص جديد!**\n\n"
+                  f"👤 من: {rider_name}\n"
+                  f"📋 **التفاصيل:**\n{details}\n\n"
+                  f"💰 **العرض:** {price} ريال\n"
+                  f"📉 **العمولة:** {price * 0.10} ريال"),
+            reply_markup=kb_accept
+        )
+        await query.edit_message_text("⏳ تم إرسال طلبك والتفاصيل للكابتن.. بانتظار رده.")
 
         # إرسال العرض للكابتن
         kb_accept = InlineKeyboardMarkup([
@@ -1100,44 +1158,60 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ الاستخدام: `/logs ID1 ID2`")
 
 
-async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نقل الرسائل بين الطرفين (نص، صوت، موقع، صور)"""
-    user_id = update.effective_user.id
-
-    # تجاهل الأوامر والرسائل في القروبات
-    if update.message.chat.type != "private" or (update.message.text and update.message.text.startswith("/")):
+ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1. التحقق من صلاحية الأدمن
+    if update.effective_user.id not in ADMIN_IDS:
         return
 
-    # فحص هل المستخدم في محادثة نشطة؟
-    partner_id = get_chat_partner(user_id)
-
-    if not partner_id:
-        # إذا لم يكن في محادثة، دعه يكمل مع البوت بشكل طبيعي (global_handler)
-        return 
-
-    # زر لإنهاء المحادثة يظهر دائماً
-    kb = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
-
+    # 2. التحقق من إدخال المعرفات (IDs)
     try:
-        # استخدام copy_message لنسخ المحتوى كما هو وإرساله للطرف الآخر
-        # هذه الطريقة تدعم (Voice, Photo, Text, Location) وتحافظ على الخصوصية
-        await context.bot.copy_message(
-            chat_id=partner_id,
-            from_chat_id=user_id,
-            message_id=update.message.message_id,
-            reply_markup=kb
-        )
+        if len(context.args) < 2:
+            await update.message.reply_text("⚠️ الاستخدام الصحيح: `/logs ID1 ID2`\nمثال: `/logs 12345 67890`", parse_mode=ParseMode.MARKDOWN)
+            return
 
-        # إشعار للمرسل بأن الرسالة وصلت (اختياري - يمكن إزالته لتقليل الازعاج)
-        # await update.message.reply_text("✅", disable_notification=True)
+        id1 = int(context.args[0])
+        id2 = int(context.args[1])
 
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text("❌ خطأ في الاتصال بقاعدة البيانات.")
+            return
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # جلب الرسائل المتبادلة بين الطرفين
+            cur.execute("""
+                SELECT sender_id, message_content, created_at 
+                FROM chat_logs 
+                WHERE (sender_id = %s AND receiver_id = %s) 
+                   OR (sender_id = %s AND receiver_id = %s)
+                ORDER BY created_at ASC 
+                LIMIT 30
+            """, (id1, id2, id2, id1))
+            
+            logs = cur.fetchall()
+
+        if not logs:
+            await update.message.reply_text("📭 لا توجد سجلات محادثة بين هذين الطرفين حالياً.")
+            return
+
+        # 3. تنسيق الرسائل للعرض
+        report = f"📜 **سجل آخر الرسائل بين:**\n🆔 `{id1}`\n🆔 `{id2}`\n"
+        report += "─────────────────\n"
+        
+        for msg in logs:
+            sender_label = "👤 الطرف [1]" if msg['sender_id'] == id1 else "🚖 الطرف [2]"
+            time_str = msg['created_at'].strftime('%H:%M')
+            report += f"[{time_str}] {sender_label}: {msg['message_content']}\n"
+
+        await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+
+    except ValueError:
+        await update.message.reply_text("⚠️ يرجى التأكد من إدخال أرقام الـ ID بشكل صحيح.")
     except Exception as e:
-        await update.message.reply_text("⚠️ فشل إرسال الرسالة، ربما قام الطرف الآخر بحظر البوت أو أنهى المحادثة.")
-        # إنهاء المحادثة في حال الخطأ
-        end_chat_session(user_id)
+        await update.message.reply_text(f"❌ حدث خطأ: {e}")
+    finally:
+        if conn: conn.close()
 
-    # نوقف التنفيذ هنا لكي لا ينتقل البوت للمدقق التالي
-    raise ApplicationHandlerStop 
 
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
