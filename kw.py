@@ -1119,43 +1119,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
-async def add_fake_drivers():
-    # بيانات وهمية لكباتن في أحياء مختلفة بالرياض (مثلاً)
-    fake_data = [
-        (111111, 'أبو فهد', '0501111111', 'كامري 2023', 'الصحافة, المروج, الياسمين', 'active'),
-        (222222, 'كابتن خالد', '0502222222', 'تويوتا 2022', 'العليا, السليمانية, الورود', 'active'),
-        (333333, 'أبو سارة', '0503333333', 'هيونداي 2021', 'الشفا, بدر, نمار', 'active'),
-        (444444, 'كابتن محمد', '0504444444', 'لكزس 2020', 'الروضة, الريان, الربوة', 'active'),
-        (555555, 'أبو نايف', '0505555555', 'فورد 2022', 'النرجس, العارض, القيروان', 'active')
-    ]
 
-
-async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS: return
-    try:
-        id1, id2 = int(context.args[0]), int(context.args[1])
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT * FROM chat_logs 
-                WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
-                ORDER BY created_at DESC LIMIT 20
-            """, (id1, id2, id2, id1))
-            logs = cur.fetchall()
-        conn.close()
-
-        if not logs:
-            await update.message.reply_text("📭 لا يوجد سجل محادثات بين هذين الطرفين.")
-            return
-
-        report = "📜 **آخر 20 رسالة بين الطرفين:**\n\n"
-        for l in reversed(logs):
-            sender = "الطرف الأول" if l['sender_id'] == id1 else "الطرف الثاني"
-            report += f"👤 {sender}: {l['message_content']}\n"
-
-        await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
-    except:
-        await update.message.reply_text("❌ الاستخدام: `/logs ID1 ID2`")
 
 
 async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
