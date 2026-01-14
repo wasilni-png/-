@@ -1245,13 +1245,19 @@ def main():
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
     application.add_handler(CommandHandler("logs", admin_get_logs))
 
+
+
     application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
 
     # الدردشة الوسيطة (Group 1)
+    # 3. الدردشة الوسيطة (الـ Relay) - يجب أن تكون في البداية 🔴
+    # نستخدم filters.ALL لضمان صيد كل شيء (نص، موقع، صور)
     application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.TEXT | filters.VOICE | filters.LOCATION | filters.PHOTO) & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
+        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
         chat_relay_handler
-    ), group=1)
+    ), group=0) # نضعها في المجموعة الأساسية لتكون لها الأولوية
+
+    
 
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
@@ -1262,7 +1268,7 @@ def main():
 
 
     # أضف هذا السطر هنا بالتحديد لربط الدردشة ✅
-    application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), chat_relay_handler))
+    
 
     application.run_polling(drop_pending_updates=True)
 
