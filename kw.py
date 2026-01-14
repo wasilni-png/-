@@ -634,9 +634,10 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🏙️ أحياء {city_name}:\nاختر الحي المطلوب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     # 3. عرض الكباتن (الميزة المطلوبة: رسالة واحدة بجميع الأزرار)
-        elif data.startswith("search_dist_"):
+    elif data.startswith("search_dist_"):
         selected_dist = data.split("_")[2]
 
+        # حذف قائمة الأحياء فوراً لتنظيف القروب
         try:
             await query.message.delete()
         except:
@@ -646,7 +647,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         found = []
         for d in CACHED_DRIVERS:
             if d.get('districts'):
-                # تنظيف ومطابقة الحي
                 d_districts = d['districts'].replace("،", ",").split(",")
                 if any(selected_dist.strip() in item.strip() for item in d_districts):
                     found.append(d)
@@ -656,28 +656,20 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=query.message.chat_id,
                 text=f"❌ نعتذر، لا يوجد كابتن متوفر حالياً في حي ({selected_dist})."
             )
-        else:
-            # بناء قائمة الأزرار
+                else:
+            # بناء قائمة الأزرار في رسالة واحدة
             keyboard = []
-            for d in found[:8]:
+            for d in found[:8]: # عرض أول 8 كباتن فقط
                 btn_label = f"🚖 {d['name']} - ({d['car_info']})"
-                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"start_chat_{d['user_id']}")])
+                # ابحث عن هذا السطر داخل handle_callbacks وقم بتغييره:
+keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"start_chat_{d['user_id']}")])
 
-            # إرسال الرسالة وجدولة حذفها
-            sent_msg = await context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\nاضغط على الكابتن لبدء محادثة (تختفي الرسالة بعد 5 دقائق):",
+                text=f"✅ **كباتن حي {selected_dist} المتاحين:**\nاضغط على الكابتن المناسب لبدء التفاوض:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.MARKDOWN
             )
-
-            context.job_queue.run_once(
-                delete_message_job, 
-                when=300, 
-                data=sent_msg.message_id, 
-                chat_id=query.message.chat_id
-            )
-
 
     # 4. طلب عام (بحث بالموقع)
     elif data == "order_general":
@@ -1086,4 +1078,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
