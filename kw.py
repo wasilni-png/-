@@ -4,6 +4,7 @@
 import logging
 import threading
 import os
+import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
 from enum import Enum
@@ -286,6 +287,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].startswith("order_"):
         # هام جداً: مسح أي حالات قديمة لضمان أن البوت سيستقبل "النص القادم" كـ (تفاصيل مشوار)
         context.user_data.clear()
+
+if context.args and context.args[0].startswith("order_"):
+        context.user_data.clear()
+        
+        # فك تشفير الرابط لضمان قراءة اللغة العربية بشكل صحيح
+        raw_args = urllib.parse.unquote(context.args[0])
+        parts = raw_args.split("_")
+        
+        if len(parts) >= 3:
+            driver_id = parts[1]
+            dist_name = parts[2] # ستظهر "القبلتين" بشكل صحيح الآن
+
+            context.user_data.update({
+                'driver_to_order': driver_id,
+                'order_dist': dist_name,
+                'state': 'WAIT_TRIP_DETAILS'
+            })
+            
+            await update.message.reply_text(
+                f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
         
         parts = context.args[0].split("_")
         if len(parts) >= 3:
@@ -995,40 +1021,32 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"لطلب الكابتن، يرجى الضغط على الزر أدناه وإرسال التفاصيل في الخاص:", reply_markup=kb)
 
 
+# داخل handle_callbacks عند إنشاء رابط الطلب:
+elif data.startswith("book_"):
+    parts = data.split("_")
+    driver_id = parts[1]
+    dist_name = parts[2]
+    
+    # ترميز اسم الحي (مثل القبلتين) ليكون صالحاً للروابط
+    encoded_dist = urllib.parse.quote(dist_name)
+    
+    bot_username = (await context.bot.get_me()).username
+    # الرابط الجديد المشفر
+    url = f"https://t.me/{bot_username}?start=order_{driver_id}_{encoded_dist}"
+    
+    await query.edit_message_text(
+        f"📥 لطلب الكابتن في حي {dist_name}، اضغط على الزر أدناه:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ اضغط هنا لبدء الطلب", url=url)
+        ]])
+    )
+
+
     # ===============================================================
     # 10. التوثيق من قبل الأدمن
     # ===============================================================
         # ---------------------------------------------------------
-    # 10. معالجة اختيار الحي من القروب (عرض الكباتن)
-    # ---------------------------------------------------------
-    elif data.startswith("search_dist_"):
-        selected_dist = data.split("_")[2]
-        await sync_all_users()
-        
-        matched_drivers = []
-        for d in CACHED_DRIVERS:
-            if d.get('districts'):
-                # تنظيف ومقارنة الأحياء (تأكد من مطابقة الهاء والتاء المربوطة)
-                d_dists = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
-                clean_search = selected_dist.replace("ة", "ه")
-                
-                if clean_search in d_dists:
-                    matched_drivers.append(d)
-
-        if not matched_drivers:
-            await query.edit_message_text(f"📍 حي {selected_dist}:\n\nللأسف لا يوجد كباتن مسجلين في هذا الحي حالياً.")
-        else:
-            keyboard = []
-            for d in matched_drivers[:8]: # عرض أول 8 كباتن
-                # الرابط يحول المستخدم لخاص البوت ليبدأ الطلب بشكل رسمي أو لخاص الكابتن
-                keyboard.append([InlineKeyboardButton(f"🚖 الكابتن {d['name']} ({d['car_info']})", url=f"tg://user?id={d['user_id']}")])
-            
-            await query.edit_message_text(
-                f"✅ **كباتن متوفرين في حي {selected_dist}:**\nاضغط على اسم الكابتن للتواصل معه مباشرة:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-
+    # 10. معالجة اختيار الحي من القروب (عرض
 
 # --- أوامر الأدمن ---
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
