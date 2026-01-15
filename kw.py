@@ -753,31 +753,40 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------------------------------------------------------
     # 2. اختيار الحي (بعد اختيار المدينة)
     # ------------------------------------------    
+        # اختيار المدينة يعرض قائمة الأحياء
     elif data.startswith("city_"):
         city_name = data.split("_")[1]
         districts = CITIES_DISTRICTS.get(city_name, [])
         keyboard = []
-
-        # الحلقة تقفز خطوتين في كل دورة (0, 2, 4...)
         for i in range(0, len(districts), 2):
-            # إنشاء صف جديد وإضافة الحي الأول (Index i)
-            row = [InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}")]
-
-            # التأكد من وجود حي تالٍ (Index i+1) لإضافته في نفس الصف
+            row = [InlineKeyboardButton(districts[i], callback_data=f"search_dist_{districts[i]}")]
             if i + 1 < len(districts):
-                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"sel_dist_{districts[i+1]}"))
-
-            # إضافة الصف المكتمل (سواء بزر واحد أو اثنين) إلى القائمة الكلية
+                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"search_dist_{districts[i+1]}"))
             keyboard.append(row)
+        
+        await query.edit_message_text(f"📍 أحياء {city_name}:\nاختر الحي لرؤية الكباتن:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-        # إضافة زر الرجوع في صف منفصل تماماً بأسفل القائمة
-        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="order_by_district")])
+    # اختيار الحي يعرض قائمة السائقين
+    elif data.startswith("search_dist_"):
+        selected_dist = data.split("_")[2]
+        await sync_all_users() # تحديث البيانات من القاعدة
 
-        # تحديث الرسالة بالقائمة الجديدة
-        await query.edit_message_text(
-            text=f"🏙️ أحياء {city_name}:\nاختر الحي الذي تتواجد فيه لطلب كابتن:", 
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        matched_drivers = []
+        for d in CACHED_DRIVERS:
+            if d.get('districts'):
+                # التأكد من مطابقة اسم الحي (معالجة التاء المربوطة والهاء)
+                d_list = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
+                if selected_dist.replace("ة", "ه") in d_list:
+                    matched_drivers.append(d)
+
+        if not matched_drivers:
+            await query.edit_message_text(f"📍 حي {selected_dist}:\n\nللأسف، لا يوجد كباتن متاحين في هذا الحي حالياً.")
+        else:
+            keyboard = []
+            for d in matched_drivers[:10]: # عرض أول 10 كباتن
+                keyboard.append([InlineKeyboardButton(f"🚖 الكابتن {d['name']}", callback_data=f"book_{d['user_id']}_{selected_dist}")])
+            
+            await query.edit_message_text(f"✅ كباتن متوفرين في {selected_dist}:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
     # ---------------------------------------------------------
@@ -1012,39 +1021,19 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     elif data.startswith("book_"):
-        try:
-            parts = data.split("_")
-            if len(parts) < 3:
-                await query.answer("⚠️ بيانات الطلب غير مكتملة.")
-                return
-
-            driver_id = parts[1]
-            dist_name = parts[2]
-
-            # 1. تنبيه المستخدم برسالة علوية
-            await query.answer("سيتم نقلك لخاص البوت لإتمام الطلب...", show_alert=False)
-
-            # 2. ترميز اسم الحي (URL Encoding) لضمان عمل الروابط العربية
-            encoded_dist = urllib.parse.quote(dist_name)
-
-            # 3. إنشاء رابط الـ Deep Link
-            bot_username = (await context.bot.get_me()).username
-            url = f"https://t.me/{bot_username}?start=order_{driver_id}_{encoded_dist}"
-
-            # 4. تحديث الرسالة بالزر الذي يوجه للخاص
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("إرسال تفاصيل المشوار والاتفاق 💬", url=url)
-            ]])
-
-            await query.edit_message_text(
-                f"📥 **طلب كابتن في حي {dist_name}**\n\n"
-                "يجب عليك إرسال تفاصيل مشوارك والسعر المقترح في الخاص لتتمكن من مراسلة الكابتن.",
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in book callback: {e}")
-            await query.answer("❌ حدث خطأ أثناء تجهيز الطلب.")
+        parts = data.split("_")
+        driver_id = parts[1]
+        # لا نضع اسم الحي في الرابط لتجنب مشاكل التشفير
+        
+        bot_username = (await context.bot.get_me()).username
+        url = f"https://t.me/{bot_username}?start=req_{driver_id}"
+        
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ اضغط هنا لبدء الطلب", url=url)]])
+        
+        await query.edit_message_text(
+            "⚠️ لإتمام الطلب، يجب الانتقال لخاص البوت لإدخال التفاصيل والسعر:",
+            reply_markup=kb
+        )
 
 
     # ===============================================================
