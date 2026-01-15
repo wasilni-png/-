@@ -1179,17 +1179,33 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # 1. التأكد من أن المستخدم في محادثة نشطة
+    # 1. التأكد أن الرسالة ليست أمراً
+    if not update.message or (update.message.text and update.message.text.startswith("/")):
+        return
+
+    # 2. جلب الطرف الآخر
     partner_id = get_chat_partner(user_id)
     if not partner_id:
-        return # إذا لم يكن لديه شريك، يترك المعالجة للـ global_handler
+        return 
 
-    # 2. تحديد محتوى ونوع الرسالة للحفظ
-    msg_content = update.message.text if update.message.text else "[وسائط أو موقع]"
-    # تحويل نوع الرسالة لنص صريح ليتوافق مع قاعدة البيانات
-    msg_type_str = str(update.message.type) if update.message else "unknown"
+    # 3. تحديد نوع الرسالة يدوياً لتخزينه في القاعدة
+    if update.message.text:
+        msg_type = "text"
+        msg_content = update.message.text
+    elif update.message.location:
+        msg_type = "location"
+        msg_content = f"📍 موقع: {update.message.location.latitude}, {update.message.location.longitude}"
+    elif update.message.photo:
+        msg_type = "photo"
+        msg_content = "🖼️ [صورة]"
+    elif update.message.voice:
+        msg_type = "voice"
+        msg_content = "🎤 [رسالة صوتية]"
+    else:
+        msg_type = "other"
+        msg_content = "📎 [وسائط]"
 
-    # 3. حفظ السجل في قاعدة البيانات
+    # 4. حفظ في قاعدة البيانات (السجلات)
     conn = get_db_connection()
     if conn:
         try:
@@ -1197,14 +1213,14 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 cur.execute("""
                     INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type)
                     VALUES (%s, %s, %s, %s)
-                """, (int(user_id), int(partner_id), str(msg_content), msg_type_str))
+                """, (int(user_id), int(partner_id), msg_content, msg_type))
                 conn.commit()
         except Exception as e:
-            print(f"❌ خطأ أثناء حفظ السجل: {e}")
+            print(f"❌ خطأ في حفظ SQL: {e}")
         finally:
             conn.close()
 
-    # 4. نقل الرسالة للطرف الآخر
+    # 5. نقل الرسالة للطرف الآخر
     kb_chat = ReplyKeyboardMarkup([
         [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
         [KeyboardButton("❌ إنهاء المحادثة")]
@@ -1218,11 +1234,9 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=kb_chat
         )
     except Exception as e:
-        print(f"❌ فشل نقل الرسالة: {e}")
-        # إذا فشل النقل (قد يكون الطرف الآخر حظر البوت)، ننهي الجلسة
-        end_chat_session(user_id)
-    
-    # 5. إيقاف المعالجات الأخرى لضمان عدم تكرار الرد
+        print(f"❌ فشل النقل: {e}")
+
+    # منع الرسالة من الوصول للـ global_handler
     raise ApplicationHandlerStop
 
 
