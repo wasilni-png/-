@@ -984,40 +984,40 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⚙️ تم تحديث الحالة للمستخدم {uid}")
 
 
-    elif data.startswith("book_"):
-        parts = data.split("_")
-        driver_id = parts[1]
-        dist = parts[2]
-        
-        # تحويل الراكب للخاص لبدء إدخال التفاصيل
-        bot_username = (await context.bot.get_me()).username
-        start_link = f"https://t.me/{bot_username}?start=order_{driver_id}_{dist}"
-        
-        await query.answer("سيتم نقلك لخاص البوت لإتمام الطلب...", show_alert=True)
-        # نرسل له زر يحوله للخاص لأن تليجرام لا يسمح بفتح الخاص تلقائياً
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("إرسال تفاصيل المشوار 💬", url=start_link)]])
-        await query.edit_message_text(f"لطلب الكابتن، يرجى الضغط على الزر أدناه وإرسال التفاصيل في الخاص:", reply_markup=kb)
+        elif data.startswith("book_"):
+        try:
+            parts = data.split("_")
+            if len(parts) < 3:
+                await query.answer("⚠️ بيانات الطلب غير مكتملة.")
+                return
 
+            driver_id = parts[1]
+            dist_name = parts[2]
+            
+            # 1. تنبيه المستخدم برسالة علوية
+            await query.answer("سيتم نقلك لخاص البوت لإتمام الطلب...", show_alert=False)
 
-# داخل handle_callbacks عند إنشاء رابط الطلب:
-    elif data.startswith("book_"):
-    parts = data.split("_")
-    driver_id = parts[1]
-    dist_name = parts[2]
-    
-    # ترميز اسم الحي (مثل القبلتين) ليكون صالحاً للروابط
-    encoded_dist = urllib.parse.quote(dist_name)
-    
-    bot_username = (await context.bot.get_me()).username
-    # الرابط الجديد المشفر
-    url = f"https://t.me/{bot_username}?start=order_{driver_id}_{encoded_dist}"
-    
-    await query.edit_message_text(
-        f"📥 لطلب الكابتن في حي {dist_name}، اضغط على الزر أدناه:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ اضغط هنا لبدء الطلب", url=url)
-        ]])
-    )
+            # 2. ترميز اسم الحي (URL Encoding) لضمان عمل الروابط العربية
+            encoded_dist = urllib.parse.quote(dist_name)
+            
+            # 3. إنشاء رابط الـ Deep Link
+            bot_username = (await context.bot.get_me()).username
+            url = f"https://t.me/{bot_username}?start=order_{driver_id}_{encoded_dist}"
+            
+            # 4. تحديث الرسالة بالزر الذي يوجه للخاص
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("إرسال تفاصيل المشوار والاتفاق 💬", url=url)
+            ]])
+            
+            await query.edit_message_text(
+                f"📥 **طلب كابتن في حي {dist_name}**\n\n"
+                "يجب عليك إرسال تفاصيل مشوارك والسعر المقترح في الخاص لتتمكن من مراسلة الكابتن.",
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in book callback: {e}")
+            await query.answer("❌ حدث خطأ أثناء تجهيز الطلب.")
 
 
     # ===============================================================
