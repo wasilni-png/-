@@ -281,31 +281,43 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
+    
+    # التحقق من وجود بيانات طلب مشوار في الرابط (Deep Link)
+    if context.args and context.args[0].startswith("order_"):
+        parts = context.args[0].split("_")
+        # parts[1] هو آيدي الكابتن، parts[2] هو اسم الحي
+        driver_id = parts[1]
+        dist_name = parts[2]
+        
+        # تخزين بيانات الطلب مؤقتاً في ذاكرة المستخدم
+        context.user_data['driver_to_order'] = driver_id
+        context.user_data['order_dist'] = dist_name
+        
+        # تغيير الحالة لانتظار التفاصيل
+        context.user_data['state'] = 'WAIT_TRIP_DETAILS'
+        
+        await update.message.reply_text(
+            f"👋 أهلاً بك يا {first_name}\n\n"
+            f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+            "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+            "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
 
-    # محاولة الجلب من الكاش أولاً
+    # الكود العادي للبوت (الدخول المباشر)
     await sync_all_users()
     user = USER_CACHE.get(user_id)
-
     if user:
-        role_name = "الكابتن" if user['role'] == 'driver' else "الراكب"
-        status_icon = "✅ موثق" if user['is_verified'] else "⏳ قيد المراجعة"
-        welcome_text = (
-            f"👋 أهلاً بك مجدداً، {role_name} **{user['name']}**\n"
-            f"🛡️ الحالة: {status_icon}\n"
-            "─────────────────\n"
-            "🚀 استخدم القائمة بالأسفل للتحكم."
+        await update.message.reply_text(
+            f"👋 أهلاً بك مجدداً يا {user['name']}", 
+            reply_markup=get_main_kb(user['role'], user['is_verified'])
         )
-        await update.message.reply_text(welcome_text, reply_markup=get_main_kb(user['role'], user['is_verified']), parse_mode=ParseMode.MARKDOWN)
     else:
-        welcome_new = (
-            f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل الذكي!\n\n"
-            "يرجى اختيار نوع الحساب للتسجيل:"
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
-             InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
-        ])
-        await update.message.reply_text(welcome_new, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        # كود التسجيل الجديد كما هو في كودك السابق
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
+                                     InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]])
+        await update.message.reply_text(f"👋 مرحباً بك يا {first_name}، يرجى التسجيل أولاً:", reply_markup=kb)
 
 # --- التسجيل ---
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -645,6 +657,59 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
         return
+
+    # --- المسار الجديد لطلب المشوار ---
+
+    # الخطوة 1: استلام التفاصيل وطلب السعر
+    if state == 'WAIT_TRIP_DETAILS':
+        context.user_data['trip_details_text'] = text # حفظ التفاصيل
+        
+        await update.message.reply_text(
+            "✅ تم حفظ التفاصيل.\n\n"
+            "💰 **الآن، يرجى تحديد السعر الذي تعرضه لهذا المشوار؟**\n"
+            "(أدخل أرقاماً فقط، مثال: 30)"
+        )
+        # تغيير الحالة لانتظار السعر
+        context.user_data['state'] = 'WAIT_TRIP_PRICE'
+        return
+
+    # الخطوة 2: استلام السعر وإرسال الطلب النهائي للكابتن
+    if state == 'WAIT_TRIP_PRICE':
+        try:
+            price = float(text)
+            driver_id = context.user_data.get('driver_to_order')
+            details = context.user_data.get('trip_details_text')
+            dist = context.user_data.get('order_dist')
+            rider_name = update.effective_user.first_name
+
+            # أزرار الكابتن للقبول أو الرفض
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ قبول (خصم عمولة)", callback_data=f"accept_ride_{user_id}_{price}"),
+                 InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{user_id}")]
+            ])
+
+            # إرسال الرسالة للكابتن
+            await context.bot.send_message(
+                chat_id=driver_id,
+                text=(f"🔔 **طلب مشوار جديد خاص!**\n\n"
+                      f"👤 العميل: {rider_name}\n"
+                      f"📍 الحي: {dist}\n"
+                      f"📋 التفاصيل: {details}\n"
+                      f"💰 السعر المعروض: {price} ريال"),
+                reply_markup=kb
+            )
+
+            await update.message.reply_text(
+                "✅ تم إرسال طلبك وسعرك للكابتن بنجاح.\n"
+                "سأقوم بإبلاغك فور قبوله للطلب لفتح المحادثة."
+            )
+            # تصفير الحالة لكي يستطيع المستخدم استخدام البوت بشكل طبيعي
+            context.user_data['state'] = None
+            
+        except ValueError:
+            await update.message.reply_text("⚠️ عذراً، يرجى إدخال السعر كأرقام فقط (مثال: 40).")
+        return
+
 
 # --- معالجة المواقع (Location) ---
 
