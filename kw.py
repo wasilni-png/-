@@ -315,7 +315,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
-        
+        except Exception as e:
+            logger.error(f"Error decoding link: {e}")
 
     # 2. 
     # الكود العادي للمستخدمين الذين دخلوا بدون رابط
