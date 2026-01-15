@@ -724,9 +724,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in range(0, len(districts), 2):
             row = [InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}")]
             if i + 1 < len(districts):
-                # داخل قسم elif :
-# تأكد أن الكود يبدو هكذا:
-row.append(InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}"))
+                # داخل قسم
+        row.append(InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}"))
 
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="order_by_district")])
