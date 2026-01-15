@@ -281,31 +281,35 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
-    
+
     # التحقق من وجود بيانات طلب مشوار في الرابط (Deep Link)
     if context.args and context.args[0].startswith("order_"):
+        # هام جداً: مسح أي حالات قديمة لضمان أن البوت سيستقبل "النص القادم" كـ (تفاصيل مشوار)
+        context.user_data.clear()
+        
         parts = context.args[0].split("_")
-        # parts[1] هو آيدي الكابتن، parts[2] هو اسم الحي
-        driver_id = parts[1]
-        dist_name = parts[2]
-        
-        # تخزين بيانات الطلب مؤقتاً في ذاكرة المستخدم
-        context.user_data['driver_to_order'] = driver_id
-        context.user_data['order_dist'] = dist_name
-        
-        # تغيير الحالة لانتظار التفاصيل
-        context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-        
-        await update.message.reply_text(
-            f"👋 أهلاً بك يا {first_name}\n\n"
-            f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
-            "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-            "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+        if len(parts) >= 3:
+            driver_id = parts[1]
+            dist_name = parts[2]
 
-    # محاولة الجلب من الكاش أولاً
+            # تخزين بيانات الطلب مؤقتاً في ذاكرة المستخدم
+            context.user_data['driver_to_order'] = driver_id
+            context.user_data['order_dist'] = dist_name
+            
+            # تغيير الحالة لانتظار التفاصيل فوراً
+            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
+
+            await update.message.reply_text(
+                f"👋 أهلاً بك يا {first_name}\n\n"
+                f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+                "📝 **يرجى كتابة تفاصيل مشوارك الآن في رسالة واحدة:**\n"
+                "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+    # الكود العادي للمستخدمين الذين دخلوا بدون رابط
     await sync_all_users()
     user = USER_CACHE.get(user_id)
 
@@ -320,6 +324,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(welcome_text, reply_markup=get_main_kb(user['role'], user['is_verified']), parse_mode=ParseMode.MARKDOWN)
     else:
+        # كود تسجيل المستخدم الجديد (كما هو في كودك)
         welcome_new = (
             f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل الذكي!\n\n"
             "يرجى اختيار نوع الحساب للتسجيل:"
@@ -1350,38 +1355,35 @@ def run_flask():
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
-    
-    # زيادة المهلة لضمان استقرار الاتصال على Render
-    request_config = HTTPXRequest(connect_timeout=30, read_timeout=30)
-    application = ApplicationBuilder().token(BOT_TOKEN).request(request_config).build()
 
-    # 1. الأوامر الأساسية (لها الأولوية القصوى)
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # 1. الأوامر (الأولوية القصوى)
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("sub", admin_add_days))
-    application.add_handler(CommandHandler("cash", admin_cash))
-    application.add_handler(CommandHandler("broadcast", admin_broadcast))
-    application.add_handler(CommandHandler("logs", admin_get_logs))
-    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
+    
+    # أضف هذا الهاندلر لإلغاء الطلب إذا غير المستخدم رأيه
+    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
+    
+    # ... باقي الـ CommandHandlers (sub, cash, broadcast, logs) ...
 
-    # 2. معالجة حالات التسجيل والطلبات (Global Handler) 
-    # يجب أن يكون قبل الـ Relay لكي يستطيع المستخدم التسجيل
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler), group=1)
-
-    # 3. الدردشة الوسيطة (Relay)
-    # تعمل فقط إذا كان المستخدم "في محادثة نشطة" فعلياً
+    # 2. الدردشة الوسيطة (Relay) - نعطيها Group 0 لكي لا تتصادم مع الـ Global
+    # ونضعها في الأعلى لكي يتم فحص "هل المستخدم في دردشة حالية؟" قبل أي شيء
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
         chat_relay_handler
-    ), group=2)
+    ), group=0)
 
-    # 4. المعالجات الأخرى
+    # 3. المعالج الشامل (Global Handler) للحالات (Registration, Wait Details)
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
+        global_handler
+    ), group=1)
+
+    # 4. المعالجات العامة
     application.add_handler(CallbackQueryHandler(handle_callbacks))
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
-    
-    # تنظيف الرسائل القديمة عند التشغيل
+
     application.run_polling(drop_pending_updates=True)
-
-
 if __name__ == '__main__':
     main()
