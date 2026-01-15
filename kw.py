@@ -280,43 +280,47 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(text=welcome_text, reply_markup=reply_markup)
 
 
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
 
-    # 1. التحقق من وجود رابط طلب (Deep Link)
-    if context.args and context.args[0].startswith("order_"):
-        # مسح الذاكرة المؤقتة لضمان استقبال نظيف للطلب
-        context.user_data.clear()
-
-        # فك تشفير النص (لتحويل الرموز مثل %D8 إلى حروف عربية)
-        try:
-            raw_args = urllib.parse.unquote(context.args[0])
-            parts = raw_args.split("_")
+    # فحص إذا كان الدخول عبر رابط طلب مشوار
+    if context.args and len(context.args) > 0:
+        arg_value = context.args[0]
+        
+        if arg_value.startswith("order_"):
+            context.user_data.clear() # تنظيف الحالة تماماً
             
-            if len(parts) >= 3:
-                driver_id = parts[1]
-                dist_name = parts[2]  # هنا ستكون "القبلتين" واضحة للبوت
+            try:
+                # فك تشفير الرابط (لحل مشكلة القبلتين)
+                decoded_args = urllib.parse.unquote(arg_value)
+                parts = decoded_args.split("_")
+                
+                if len(parts) >= 3:
+                    driver_id = parts[1]
+                    # دمج الأجزاء المتبقية في حال كان اسم الحي يحتوي على "_"
+                    dist_name = "_".join(parts[2:]) 
 
-                # حفظ البيانات وتحديد الحالة
-                context.user_data.update({
-                    'driver_to_order': driver_id,
-                    'order_dist': dist_name,
-                    'state': 'WAIT_TRIP_DETAILS'
-                })
+                    context.user_data.update({
+                        'driver_to_order': driver_id,
+                        'order_dist': dist_name,
+                        'state': 'WAIT_TRIP_DETAILS'
+                    })
 
-                await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}\n\n"
-                    f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
-                    "📝 **يرجى كتابة تفاصيل مشوارك الآن في رسالة واحدة:**\n"
-                    "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
-                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-        except Exception as e:
-            logger.error(f"Error decoding link: {e}")
+                    await update.message.reply_text(
+                        f"👋 أهلاً بك يا {first_name}\n\n"
+                        f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+                        "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                        "(مثلاً: من شارع.. إلى.. الساعة..)",
+                        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    return # إنهاء الدالة هنا لضمان عدم ظهور رسالة الترحيب العادية
+            except Exception as e:
+                print(f"Error decoding: {e}")
+
+    # الكود العادي للمستخدمين المسجلين أو الجدد (أكمل الكود هنا...)
+
 
     # 2. 
     # الكود العادي للمستخدمين الذين دخلوا بدون رابط
