@@ -768,46 +768,62 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
     # 1. معالجة البحث من القروب (عرض الكباتن + تحويل لخاص البوت)
     # ===============================================================
+   
+    # البحث من القروب
     if data.startswith("search_dist_"):
         selected_dist = data.split("_")[2]
-        
-        # تحديث القائمة لضمان وجود أحدث الكباتن
         await sync_all_users()
+        bot_username = (await context.bot.get_me()).username
         
-        matched_drivers = []
-        # توحيد الحروف (الهاء والتاء المربوطة) لتحسين البحث
-        clean_search = selected_dist.replace("ة", "ه").strip()
+        matched = [d for d in CACHED_DRIVERS if d.get('districts') and selected_dist.replace("ة","ه") in d['districts'].replace("ة","ه")]
         
-        for d in CACHED_DRIVERS:
-            if d.get('districts'):
-                # تنظيف قائمة أحياء الكابتن
-                d_dists = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
-                if clean_search in d_dists:
-                    matched_drivers.append(d)
-
-        if not matched_drivers:
-            await query.edit_message_text(f"📍 حي {selected_dist}:\n\n⚠️ للأسف لا يوجد كباتن مسجلين في هذا الحي حالياً.")
+        if not matched:
+            await query.edit_message_text(f"📍 حي {selected_dist}: لا يوجد كباتن حالياً.")
         else:
             keyboard = []
-            # جلب معرف البوت لإنشاء الرابط
-            bot_username = (await context.bot.get_me()).username
-            
-            for d in matched_drivers[:8]: # عرض أول 8 كباتن فقط لتجنب طول القائمة
-                # إنشاء رابط ينقل المستخدم لخاص البوت مع بيانات الطلب
-                # الصيغة: https://t.me/BOT?start=order_DRIVERID_DISTRICT
-                deep_link = f"https://t.me/{bot_username}?start=order_{d['user_id']}_{selected_dist}"
-                
-                keyboard.append([InlineKeyboardButton(
-                    f"🚖 اطلب {d['name']} ({d['car_info']})", 
-                    url=deep_link
-                )])
-            
-            await query.edit_message_text(
-                f"✅ **كباتن متوفرين في حي {selected_dist}:**\n\nاضغط على اسم الكابتن لتقديم طلب مشوار (سيتم نقلك للمحادثة الخاصة مع البوت):",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            for d in matched[:8]:
+                link = f"https://t.me/{bot_username}?start=order_{d['user_id']}_{selected_dist}"
+                keyboard.append([InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=link)])
+            await query.edit_message_text(f"✅ كباتن حي {selected_dist}:", reply_markup=InlineKeyboardMarkup(keyboard))
 
+    # قبول الكابتن للطلب
+    elif data.startswith("accept_ride_"):
+        parts = data.split("_")
+        rider_id, price = int(parts[2]), float(parts[3])
+        
+        # التأكد من الرصيد
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT balance, name FROM users WHERE user_id = %s", (user_id,))
+            res = cur.fetchone()
+            if res and res[0] < 0:
+                await query.answer("⚠️ رصيدك سالب، يرجى الشحن أولاً!", show_alert=True)
+                return
+            d_name = res[1]
+
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ فتح الدردشة", callback_data=f"final_start_{user_id}_{price}"),
+                                     InlineKeyboardButton("❌ إلغاء", callback_data=f"reject_ride_{user_id}")]])
+        
+        await query.edit_message_text("⏳ بانتظار موافقة العميل النهائية لفتح الدردشة...")
+        await context.bot.send_message(chat_id=rider_id, text=f"🎉 وافق الكابتن {d_name} على عرضك ({price} ريال). هل تريد بدء المحادثة؟", reply_markup=kb)
+
+    # التشغيل النهائي للـ Relay والخصم
+    elif data.startswith("final_start_"):
+        parts = data.split("_")
+        driver_id, price = int(parts[2]), float(parts[3])
+        rider_id = user_id
+        commission = price * 0.10
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
+            conn.commit()
+        
+        start_chat_session(driver_id, rider_id)
+        kb_end = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+        await query.edit_message_text("✅ تم بدء المحادثة.")
+        await context.bot.send_message(rider_id, "🔔 متصل الآن بالكابتن...", reply_markup=kb_end)
+        await context.bot.send_message(driver_id, f"🔔 تم خصم {commission} ريال. العميل معك الآن.", reply_markup=kb_end)
     # ===============================================================
     # 2. القائمة الرئيسية: اختيار المدينة (للبحث اليدوي من الخاص)
     # ===============================================================
