@@ -518,7 +518,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # معالجة تفاصيل التوصيل
-        if state == 'WAIT_TRIP_DETAILS':
+    if state == 'WAIT_TRIP_DETAILS':
         details = text
         driver_id = context.user_data.get('driver_to_order')
         dist = context.user_data.get('order_dist')
