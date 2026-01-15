@@ -1178,43 +1178,52 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # تجاهل الأوامر والرسائل في المجموعات
-    if not update.message or (update.message.text and update.message.text.startswith("/")):
-        return
-
+    
+    # 1. التأكد من أن المستخدم في محادثة نشطة
     partner_id = get_chat_partner(user_id)
     if not partner_id:
-        return # ليس في محادثة نشطة
+        return # إذا لم يكن لديه شريك، يترك المعالجة للـ global_handler
 
-    # لوحة أزرار الدردشة (الموقع والإنهاء)
+    # 2. تحديد محتوى ونوع الرسالة للحفظ
+    msg_content = update.message.text if update.message.text else "[وسائط أو موقع]"
+    # تحويل نوع الرسالة لنص صريح ليتوافق مع قاعدة البيانات
+    msg_type_str = str(update.message.type) if update.message else "unknown"
+
+    # 3. حفظ السجل في قاعدة البيانات
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type)
+                    VALUES (%s, %s, %s, %s)
+                """, (int(user_id), int(partner_id), str(msg_content), msg_type_str))
+                conn.commit()
+        except Exception as e:
+            print(f"❌ خطأ أثناء حفظ السجل: {e}")
+        finally:
+            conn.close()
+
+    # 4. نقل الرسالة للطرف الآخر
     kb_chat = ReplyKeyboardMarkup([
         [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
         [KeyboardButton("❌ إنهاء المحادثة")]
     ], resize_keyboard=True)
 
     try:
-        # نقل الرسالة (سواء نص أو موقع أو صورة)
         await context.bot.copy_message(
             chat_id=partner_id,
             from_chat_id=user_id,
             message_id=update.message.message_id,
             reply_markup=kb_chat
         )
-        
-        # حفظ في قاعدة البيانات (السجلات)
-        msg_content = update.message.text if update.message.text else "📍 [أرسل موقعاً أو وسائط]"
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type)
-                    VALUES (%s, %s, %s, %s)
-                """, (user_id, partner_id, msg_content, update.message.type))
-                conn.commit()
-            conn.close()
-
     except Exception as e:
-        print(f"Error in relay: {e}")
+        print(f"❌ فشل نقل الرسالة: {e}")
+        # إذا فشل النقل (قد يكون الطرف الآخر حظر البوت)، ننهي الجلسة
+        end_chat_session(user_id)
+    
+    # 5. إيقاف المعالجات الأخرى لضمان عدم تكرار الرد
+    raise ApplicationHandlerStop
 
 
 
