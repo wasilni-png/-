@@ -279,62 +279,45 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # إرسال الرسالة
         await update.message.reply_text(text=welcome_text, reply_markup=reply_markup)
 
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
 
-    # التحقق من وجود بيانات طلب مشوار في الرابط (Deep Link)
+    # 1. التحقق من وجود رابط طلب (Deep Link)
     if context.args and context.args[0].startswith("order_"):
-        # هام جداً: مسح أي حالات قديمة لضمان أن البوت سيستقبل "النص القادم" كـ (تفاصيل مشوار)
+        # مسح الذاكرة المؤقتة لضمان استقبال نظيف للطلب
         context.user_data.clear()
 
-if context.args and context.args[0].startswith("order_"):
-        context.user_data.clear()
-        
-        # فك تشفير الرابط لضمان قراءة اللغة العربية بشكل صحيح
-        raw_args = urllib.parse.unquote(context.args[0])
-        parts = raw_args.split("_")
-        
-        if len(parts) >= 3:
-            driver_id = parts[1]
-            dist_name = parts[2] # ستظهر "القبلتين" بشكل صحيح الآن
-
-            context.user_data.update({
-                'driver_to_order': driver_id,
-                'order_dist': dist_name,
-                'state': 'WAIT_TRIP_DETAILS'
-            })
+        # فك تشفير النص (لتحويل الرموز مثل %D8 إلى حروف عربية)
+        try:
+            raw_args = urllib.parse.unquote(context.args[0])
+            parts = raw_args.split("_")
             
-            await update.message.reply_text(
-                f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
-                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
+            if len(parts) >= 3:
+                driver_id = parts[1]
+                dist_name = parts[2]  # هنا ستكون "القبلتين" واضحة للبوت
+
+                # حفظ البيانات وتحديد الحالة
+                context.user_data.update({
+                    'driver_to_order': driver_id,
+                    'order_dist': dist_name,
+                    'state': 'WAIT_TRIP_DETAILS'
+                })
+
+                await update.message.reply_text(
+                    f"👋 أهلاً بك يا {first_name}\n\n"
+                    f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+                    "📝 **يرجى كتابة تفاصيل مشوارك الآن في رسالة واحدة:**\n"
+                    "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
         
-        parts = context.args[0].split("_")
-        if len(parts) >= 3:
-            driver_id = parts[1]
-            dist_name = parts[2]
 
-            # تخزين بيانات الطلب مؤقتاً في ذاكرة المستخدم
-            context.user_data['driver_to_order'] = driver_id
-            context.user_data['order_dist'] = dist_name
-            
-            # تغيير الحالة لانتظار التفاصيل فوراً
-            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-
-            await update.message.reply_text(
-                f"👋 أهلاً بك يا {first_name}\n\n"
-                f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
-                "📝 **يرجى كتابة تفاصيل مشوارك الآن في رسالة واحدة:**\n"
-                "(مثلاً: من شارع.. إلى حي.. الساعة.. عدد الركاب..)",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
+    # 2. 
     # الكود العادي للمستخدمين الذين دخلوا بدون رابط
     await sync_all_users()
     user = USER_CACHE.get(user_id)
