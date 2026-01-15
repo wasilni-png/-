@@ -243,15 +243,15 @@ def get_main_kb(role, is_verified=True):
             return ReplyKeyboardMarkup([[KeyboardButton("⏳ الحساب قيد المراجعة")]], resize_keyboard=True)
         return ReplyKeyboardMarkup([
             [KeyboardButton("📍 تحديث موقعي"), KeyboardButton("📝 تحديث الأحياء")],
-            [KeyboardButton("💰 محفظتي"), KeyboardButton("ℹ️ حالة اشتراكي")]
+            [KeyboardButton("💰 محفظتي"), KeyboardButton("ℹ️ حالة اشتراكي")],
+            [KeyboardButton("📞 تواصل مع الإدارة")] # تم إضافة الزر هنا
         ], resize_keyboard=True)
 
-    # للراكب
+     # للراكب
     return ReplyKeyboardMarkup([
         [KeyboardButton("🚖 طلب رحلة"), KeyboardButton("📍 موقعي")],
-        [KeyboardButton("💰 محفظتي")]
+        [KeyboardButton("💰 محفظتي"), KeyboardButton("📞 تواصل مع الإدارة")] # تم إضافة الزر هنا
     ], resize_keyboard=True)
-
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
