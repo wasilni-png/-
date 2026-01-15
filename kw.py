@@ -283,16 +283,16 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
+    context.user_data.clear() # تصفير أي حالة قديمة لضمان عدم تعليق البوت
 
-    # فحص إذا كان الدخول عبر رابط طلب مشوار
+    # 1. فحص إذا كان الدخول عبر رابط طلب مشوار (Deep Link) قادم من القروب
     if context.args and len(context.args) > 0:
         arg_value = context.args[0]
 
-        if arg_value.startswith("order_"):
-            context.user_data.clear() # تنظيف الحالة تماماً
-
+        # التعامل مع روابط الطلب (سواء بدأت بـ order_ أو req_)
+        if arg_value.startswith("order_") or arg_value.startswith("req_"):
             try:
-                # فك تشفير الرابط (لحل مشكلة القبلتين)
+                # 🔓 فك تشفير الرابط (لحل مشكلة الأسماء العربية مثل القبلتين)
                 decoded_args = urllib.parse.unquote(arg_value)
                 parts = decoded_args.split("_")
 
@@ -309,45 +309,49 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     await update.message.reply_text(
                         f"👋 أهلاً بك يا {first_name}\n\n"
-                        f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n\n"
+                        f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n"
+                        "─────────────────\n"
                         "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-                        "(مثلاً: من شارع.. إلى.. الساعة..)",
+                        "(مثلاً: من شارع المطار إلى الراشد مول الساعة 9 مساءً)",
                         reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                         parse_mode=ParseMode.MARKDOWN
                     )
                     return # إنهاء الدالة هنا لضمان عدم ظهور رسالة الترحيب العادية
             except Exception as e:
-                print(f"Error decoding: {e}")
+                logger.error(f"Error decoding deep link: {e}")
 
-    # الكود العادي للمستخدمين المسجلين أو الجدد (أكمل الكود هنا...)
-
-
-    # 2. 
-    # الكود العادي للمستخدمين الذين دخلوا بدون رابط
+    # 2. الكود العادي للمستخدمين الذين دخلوا بدون رابط (القائمة الرئيسية)
     await sync_all_users()
     user = USER_CACHE.get(user_id)
 
     if user:
+        # إذا كان المستخدم مسجلاً مسبقاً
         role_name = "الكابتن" if user['role'] == 'driver' else "الراكب"
         status_icon = "✅ موثق" if user['is_verified'] else "⏳ قيد المراجعة"
+        
         welcome_text = (
             f"👋 أهلاً بك مجدداً، {role_name} **{user['name']}**\n"
             f"🛡️ الحالة: {status_icon}\n"
             "─────────────────\n"
-            "🚀 استخدم القائمة بالأسفل للتحكم."
+            "🚀 استخدم القائمة بالأسفل للتحكم بالبوت."
         )
-        await update.message.reply_text(welcome_text, reply_markup=get_main_kb(user['role'], user['is_verified']), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            welcome_text, 
+            reply_markup=get_main_kb(user['role'], user['is_verified']), 
+            parse_mode=ParseMode.MARKDOWN
+        )
     else:
-        # كود تسجيل المستخدم الجديد (كما هو في كودك)
+        # إذا كان المستخدم جديداً (بدء عملية التسجيل)
         welcome_new = (
-            f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل الذكي!\n\n"
-            "يرجى اختيار نوع الحساب للتسجيل:"
+            f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل!\n\n"
+            "أنت غير مسجل حالياً، يرجى اختيار نوع الحساب للبدء:"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
              InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
         ])
         await update.message.reply_text(welcome_new, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
 
 # --- التسجيل ---
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -611,6 +615,19 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط (مثال: 40).")
         return
 
+    # استلام تفاصيل "الطلب العام" بالموقع
+    if state == 'WAIT_GENERAL_DETAILS':
+        context.user_data['trip_details_gen'] = text 
+        # يمكنك هنا إضافة خطوة لطلب السعر منفصلاً أو اعتباره ضمن النص
+        await broadcast_general_order(update, context)
+        context.user_data['state'] = None
+        await update.message.reply_text(
+            "📡 تم إرسال طلبك لجميع الكباتن القريبين منك.\nيرجى الانتظار لحين قبول الطلب.",
+            reply_markup=get_main_kb("rider", True)
+        )
+        return
+
+
 
 
 
@@ -694,38 +711,27 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lon = update.message.location.longitude
     state = context.user_data.get('state')
 
-    # تحديث الموقع في كل الحالات
+    # تحديث الموقع في الذاكرة والقاعدة
     context.user_data['lat'] = lat
     context.user_data['lon'] = lon
-
-    # تحديث في قاعدة البيانات (يمكن جعله غير متزامن لتخفيف الضغط)
     threading.Thread(target=update_db_location, args=(user_id, lat, lon)).start()
 
-    # إذا كان الغرض هو طلب رحلة
-    if state == 'WAIT_LOCATION_FOR_ORDER':
+    # إذا كان المستخدم في مسار "أقرب كابتن"
+    if state == 'WAIT_LOCATION': 
+        context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
+        await update.message.reply_text(
+            "📍 تم تحديد موقعك بنجاح.\n\n"
+            "📝 يرجى كتابة **تفاصيل المشوار والسعر المقترح** الآن:\n"
+            "مثال: (من حي العزيزية إلى المطار - 50 ريال)",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True)
+        )
+    # إذا كان المستخدم يطلب رحلة عامة بعد تحديد السعر (حالتك القديمة)
+    elif state == 'WAIT_LOCATION_FOR_ORDER':
         await broadcast_general_order(update, context)
         context.user_data['state'] = None
-        # إعادة الكيبورد الأصلي
-        await update.message.reply_text("✅ تم الإرسال.", reply_markup=get_main_kb("rider", True))
+        await update.message.reply_text("🚀 تم تعميم طلبك على الكباتن القريبين.", reply_markup=get_main_kb("rider", True))
     else:
         await update.message.reply_text("✅ تم تحديث إحداثياتك بنجاح.")
-
-def update_db_location(uid, lat, lon):
-    conn = get_db_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE users SET lat=%s, lon=%s WHERE user_id=%s", (lat, lon, uid))
-                conn.commit()
-        finally:
-            conn.close()
-# دالة لحذف الرسالة بعد وقت محدد
-async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    try:
-        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
-    except Exception as e:
-        print(f"Error deleting message: {e}")
 
 
 # --- معالجة الأزرار (Callbacks) ---
@@ -1002,9 +1008,28 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------------------------------------------------------
     # 8. الطلب العام (Order General)
     # ---------------------------------------------------------
+       # 1. عند اختيار "كابتن نخبة (بحث بالحي)"
+    if data == "order_by_district":
+        keyboard = []
+        # عرض المدن المتاحة في النظام
+        for city in CITIES_DISTRICTS.keys():
+            keyboard.append([InlineKeyboardButton(city, callback_data=f"city_{city}")])
+        
+        await query.edit_message_text(
+            "📍 **اختر المدينة التي تتواجد بها حالياً:**",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # 2. عند اختيار "أقرب كابتن (بحث بالموقع)"
     elif data == "order_general":
-        await query.edit_message_text("✍️ في أي حي تتواجد الآن؟")
-        context.user_data['state'] = 'WAIT_GENERAL_DISTRICT'
+        # نطلب من المستخدم إرسال موقعه GPS
+        context.user_data['state'] = 'WAIT_LOCATION' # تفعيل حالة انتظار الموقع
+        await query.edit_message_text(
+            "🌍 **البحث عن أقرب كابتن:**\n\n"
+            "يرجى الضغط على زر (📍 موقعي) في القائمة السفلى أو إرسال موقعك عبر (Location) الآن.",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
     # ---------------------------------------------------------
     # 9. التوثيق (Verification)
@@ -1023,18 +1048,32 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("book_"):
         parts = data.split("_")
         driver_id = parts[1]
-        # لا نضع اسم الحي في الرابط لتجنب مشاكل التشفير
+        dist_name = parts[2]
         
-        bot_username = (await context.bot.get_me()).username
-        url = f"https://t.me/{bot_username}?start=req_{driver_id}"
-        
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ اضغط هنا لبدء الطلب", url=url)]])
-        
-        await query.edit_message_text(
-            "⚠️ لإتمام الطلب، يجب الانتقال لخاص البوت لإدخال التفاصيل والسعر:",
-            reply_markup=kb
-        )
+        # حفظ بيانات الطلب في ذاكرة المستخدم
+        context.user_data['driver_to_order'] = driver_id
+        context.user_data['order_dist'] = dist_name
 
+        # فحص: هل المستخدم في محادثة خاصة أم في مجموعة؟
+        if query.message.chat.type == "private":
+            # 🟢 الحالة: المستخدم داخل الخاص أصلاً
+            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
+            await query.edit_message_text(
+                f"✅ تم اختيار الكابتن في حي **{dist_name}**\n\n"
+                "📝 يرجى إرسال **تفاصيل مشوارك** الآن (من وين لوين؟):",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            # 🔵 الحالة: المستخدم ضغط الزر من داخل القروب
+            bot_username = (await context.bot.get_me()).username
+            # نستخدم التشفير البسيط للآيدي فقط لتجنب المشاكل السابقة
+            url = f"https://t.me/{bot_username}?start=req_{driver_id}_{dist_name}"
+            
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ اضغط لبدء الطلب في الخاص", url=url)]])
+            await query.edit_message_text(
+                f"📥 لطلب الكابتن في حي {dist_name}، انتقل لخاص البوت:",
+                reply_markup=kb
+            )
 
     # ===============================================================
     # 10. التوثيق من قبل الأدمن
