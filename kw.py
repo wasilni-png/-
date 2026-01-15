@@ -1256,44 +1256,38 @@ def run_flask():
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
-    request_config = HTTPXRequest(connect_timeout=20, read_timeout=20)
-
-    # بناء التطبيق أولاً
+    
+    # زيادة المهلة لضمان استقرار الاتصال على Render
+    request_config = HTTPXRequest(connect_timeout=30, read_timeout=30)
     application = ApplicationBuilder().token(BOT_TOKEN).request(request_config).build()
 
-    # ثم إضافة المعالجات بالترتيب
+    # 1. الأوامر الأساسية (لها الأولوية القصوى)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sub", admin_add_days))
     application.add_handler(CommandHandler("cash", admin_cash))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
     application.add_handler(CommandHandler("logs", admin_get_logs))
-
-
-
     application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
 
-    # الدردشة الوسيطة (Group 1)
-    # 3. الدردشة الوسيطة (الـ Relay) - يجب أن تكون في البداية 🔴
-    # نستخدم filters.ALL لضمان صيد كل شيء (نص، موقع، صور)
+    # 2. معالجة حالات التسجيل والطلبات (Global Handler) 
+    # يجب أن يكون قبل الـ Relay لكي يستطيع المستخدم التسجيل
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler), group=1)
+
+    # 3. الدردشة الوسيطة (Relay)
+    # تعمل فقط إذا كان المستخدم "في محادثة نشطة" فعلياً
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
         chat_relay_handler
-    ), group=0) # نضعها في المجموعة الأساسية لتكون لها الأولوية
+    ), group=2)
 
-    
-
-    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
+    # 4. المعالجات الأخرى
     application.add_handler(CallbackQueryHandler(handle_callbacks))
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, global_handler))
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-
-
-    # أضف هذا السطر هنا بالتحديد لربط الدردشة ✅
     
-
+    # تنظيف الرسائل القديمة عند التشغيل
     application.run_polling(drop_pending_updates=True)
+
 
 if __name__ == '__main__':
     main()
