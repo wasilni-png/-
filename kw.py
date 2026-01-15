@@ -984,7 +984,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⚙️ تم تحديث الحالة للمستخدم {uid}")
 
 
-        elif data.startswith("book_"):
+    elif data.startswith("book_"):
         try:
             parts = data.split("_")
             if len(parts) < 3:
