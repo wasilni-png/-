@@ -716,21 +716,33 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------------------------------------------------------
     # 2. اختيار الحي (بعد اختيار المدينة)
-    # ---------------------------------------------------------
+    # ------------------------------------------    
     elif data.startswith("city_"):
         city_name = data.split("_")[1]
         districts = CITIES_DISTRICTS.get(city_name, [])
         keyboard = []
+        
+        # الحلقة تقفز خطوتين في كل دورة (0, 2, 4...)
         for i in range(0, len(districts), 2):
+            # إنشاء صف جديد وإضافة الحي الأول (Index i)
             row = [InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}")]
+            
+            # التأكد من وجود حي تالٍ (Index i+1) لإضافته في نفس الصف
             if i + 1 < len(districts):
-                # داخل قسم
-        row.append(InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}"))
-
+                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"sel_dist_{districts[i+1]}"))
+            
+            # إضافة الصف المكتمل (سواء بزر واحد أو اثنين) إلى القائمة الكلية
             keyboard.append(row)
+            
+        # إضافة زر الرجوع في صف منفصل تماماً بأسفل القائمة
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="order_by_district")])
         
-        await query.edit_message_text(f"🏙️ أحياء {city_name}:\nاختر الحي الذي تتواجد فيه:", reply_markup=InlineKeyboardMarkup(keyboard))
+        # تحديث الرسالة بالقائمة الجديدة
+        await query.edit_message_text(
+            text=f"🏙️ أحياء {city_name}:\nاختر الحي الذي تتواجد فيه لطلب كابتن:", 
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
 
     # ---------------------------------------------------------
     # 3. تم اختيار الحي -> طلب السعر من الراكب
