@@ -287,15 +287,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # فحص إذا كان الدخول عبر رابط طلب مشوار
     if context.args and len(context.args) > 0:
         arg_value = context.args[0]
-        
+
         if arg_value.startswith("order_"):
             context.user_data.clear() # تنظيف الحالة تماماً
-            
+
             try:
                 # فك تشفير الرابط (لحل مشكلة القبلتين)
                 decoded_args = urllib.parse.unquote(arg_value)
                 parts = decoded_args.split("_")
-                
+
                 if len(parts) >= 3:
                     driver_id = parts[1]
                     # دمج الأجزاء المتبقية في حال كان اسم الحي يحتوي على "_"
@@ -512,6 +512,29 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = context.user_data.get('state')
 
+
+    # --- التعامل مع زر تواصل مع الإدارة ---
+    if text == "📞 تواصل مع الإدارة":
+        await contact_admin_start(update, context)
+        return
+
+    if state == 'WAIT_ADMIN_MESSAGE':
+        if text == "❌ إلغاء المراسلة":
+            context.user_data['state'] = None
+            await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
+            return
+        
+        # إرسال للأدمن
+        for aid in ADMIN_IDS:
+            await context.bot.send_message(
+                chat_id=aid,
+                text=f"📩 **رسالة دعم جديدة**\nمن: {update.effective_user.first_name}\nID: `{user_id}`\n\n💬 النص: {text}\n\nللرد: `/send {user_id} رسالتك`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        await update.message.reply_text("✅ تم إرسال رسالتك للإدارة.")
+        context.user_data['state'] = None
+        return
+
     # 1. معالجة خطوات التسجيل المتسلسلة
     if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
@@ -541,7 +564,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == 'WAIT_TRIP_DETAILS':
         context.user_data['trip_details'] = text # حفظ التفاصيل مؤقتاً
         context.user_data['state'] = 'WAIT_TRIP_PRICE' # الانتقال لطلب السعر
-        
+
         await update.message.reply_text(
             "✅ تم استلام التفاصيل.\n\n"
             "💰 **الآن، كم السعر الذي تعرضه لهذا المشوار؟**\n"
@@ -583,13 +606,13 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "سأقوم بإبلاغك فور قبوله للطلب."
             )
             context.user_data['state'] = None # إنهاء الحالة
-            
+
         except ValueError:
             await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط (مثال: 40).")
         return
 
 
-    
+
 
     # 2. أوامر القائمة الرئيسية
     if text == "🚖 طلب رحلة":
@@ -710,7 +733,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     user_id = update.effective_user.id
-    
+
     # تفادي أخطاء الضغط المتكرر
     try:
         await query.answer()
@@ -734,22 +757,22 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         city_name = data.split("_")[1]
         districts = CITIES_DISTRICTS.get(city_name, [])
         keyboard = []
-        
+
         # الحلقة تقفز خطوتين في كل دورة (0, 2, 4...)
         for i in range(0, len(districts), 2):
             # إنشاء صف جديد وإضافة الحي الأول (Index i)
             row = [InlineKeyboardButton(districts[i], callback_data=f"sel_dist_{districts[i]}")]
-            
+
             # التأكد من وجود حي تالٍ (Index i+1) لإضافته في نفس الصف
             if i + 1 < len(districts):
                 row.append(InlineKeyboardButton(districts[i+1], callback_data=f"sel_dist_{districts[i+1]}"))
-            
+
             # إضافة الصف المكتمل (سواء بزر واحد أو اثنين) إلى القائمة الكلية
             keyboard.append(row)
-            
+
         # إضافة زر الرجوع في صف منفصل تماماً بأسفل القائمة
         keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="order_by_district")])
-        
+
         # تحديث الرسالة بالقائمة الجديدة
         await query.edit_message_text(
             text=f"🏙️ أحياء {city_name}:\nاختر الحي الذي تتواجد فيه لطلب كابتن:", 
@@ -763,7 +786,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("search_dist_"):
         selected_dist = data.split("_")[2]
         await sync_all_users()
-        
+
         matched_drivers = []
         for d in CACHED_DRIVERS:
             if d.get('districts'):
@@ -782,7 +805,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🚖 طلب الكابتن {d['name']}", 
                     callback_data=f"book_{d['user_id']}_{selected_dist}"
                 )])
-            
+
             await query.edit_message_text(
                 f"✅ **كباتن متوفرين في حي {selected_dist}:**\nاضغط على اسم الكابتن لطلب مشوار عبر البوت:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -797,7 +820,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("_")
         driver_id, price = int(parts[2]), float(parts[3])
         rider_id = user_id
-        
+
         # جلب التفاصيل المحفوظة
         details = context.user_data.get('trip_details_text', 'لا يوجد تفاصيل')
         rider_name = update.effective_user.first_name
@@ -806,7 +829,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("✅ قبول ودفع العمولة", callback_data=f"accept_ride_{rider_id}_{price}"),
              InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{rider_id}")]
         ])
-        
+
         await context.bot.send_message(
             chat_id=driver_id,
             text=(f"🔔 **طلب مشوار خاص جديد!**\n\n"
@@ -826,10 +849,10 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{rider_id}")
             ]
         ])
-        
+
         # حساب العمولة للعرض
         commission = price * 0.10
-        
+
         try:
             await context.bot.send_message(
                 chat_id=driver_id,
@@ -860,7 +883,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db_connection()
         can_accept = False
         current_balance = 0.0
-        
+
         if conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT balance, name, car_info FROM users WHERE user_id = %s", (driver_id,))
@@ -882,7 +905,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ج) إرسال استئذان للراكب (كما طلبت سابقاً)
         # ملاحظة: الخصم يتم بعد موافقة الراكب النهائية لضمان العدالة، 
         # أو يمكن الخصم هنا "حجز مبدئي". سأقوم بالخصم عند بدء الدردشة الفعلي في الخطوة التالية.
-        
+
         kb_permission = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ موافقة وفتح الدردشة", callback_data=f"final_start_{driver_id}_{price}"),
@@ -891,7 +914,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
         await query.edit_message_text("⏳ تم قبول العرض مبدئياً.. بانتظار موافقة العميل النهائية.")
-        
+
         await context.bot.send_message(
             chat_id=rider_id,
             text=(f"🎉 **وافق الكابتن {driver_name}!**\n"
@@ -922,11 +945,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # بدء الجلسة
         start_chat_session(driver_id, rider_id)
-        
+
         # إشعار الأدمن
         rider_info = USER_CACHE.get(rider_id, {"name": "غير معروف"})
         driver_info = USER_CACHE.get(driver_id, {"name": "غير معروف"})
-        
+
         admin_alert = (
             f"💰 **عملية جديدة (تم خصم العمولة)**\n"
             f"📉 العمولة: {commission} ريال\n"
@@ -951,7 +974,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ], resize_keyboard=True)
 
         await query.edit_message_text("✅ تم فتح الدردشة ومشاركة الأزرار.")
-        
+
         # إرسال الأزرار للطرفين
         await context.bot.send_message(chat_id=rider_id, text="بدأت المحادثة.. يمكنك الآن إرسال موقعك أو رسائل نصية.", reply_markup=kb_chat)
         await context.bot.send_message(chat_id=driver_id, text="بدأت المحادثة.. يمكنك الآن إرسال موقعك أو رسائل نصية.", reply_markup=kb_chat)
@@ -997,22 +1020,22 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             driver_id = parts[1]
             dist_name = parts[2]
-            
+
             # 1. تنبيه المستخدم برسالة علوية
             await query.answer("سيتم نقلك لخاص البوت لإتمام الطلب...", show_alert=False)
 
             # 2. ترميز اسم الحي (URL Encoding) لضمان عمل الروابط العربية
             encoded_dist = urllib.parse.quote(dist_name)
-            
+
             # 3. إنشاء رابط الـ Deep Link
             bot_username = (await context.bot.get_me()).username
             url = f"https://t.me/{bot_username}?start=order_{driver_id}_{encoded_dist}"
-            
+
             # 4. تحديث الرسالة بالزر الذي يوجه للخاص
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("إرسال تفاصيل المشوار والاتفاق 💬", url=url)
             ]])
-            
+
             await query.edit_message_text(
                 f"📥 **طلب كابتن في حي {dist_name}**\n\n"
                 "يجب عليك إرسال تفاصيل مشوارك والسعر المقترح في الخاص لتتمكن من مراسلة الكابتن.",
@@ -1219,6 +1242,29 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.MARKDOWN
         )
 
+async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إرسال رسالة من الأدمن لمستخدم: /send ID الرسالة"""
+    if update.effective_user.id not in ADMIN_IDS: return
+    if len(context.args) < 2:
+        await update.message.reply_text("⚠️ الاستخدام: `/send ID الرسالة`")
+        return
+    try:
+        target_id = int(context.args[0])
+        msg = " ".join(context.args[1:])
+        await context.bot.send_message(chat_id=target_id, text=f"📢 **رسالة من الإدارة:**\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"✅ تم الإرسال للمستخدم {target_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ فشل الإرسال: {e}")
+
+async def contact_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دالة يبدأ بها المستخدم (راكب/سائق) مراسلة الإدارة"""
+    context.user_data['state'] = 'WAIT_ADMIN_MESSAGE'
+    await update.message.reply_text(
+        "📝 **أرسل رسالتك أو شكواك الآن في رسالة واحدة:**",
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء المراسلة")]], resize_keyboard=True)
+    )
+
+
 
 
 async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1250,7 +1296,7 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ORDER BY created_at ASC 
                 LIMIT 30
             """, (id1, id2, id2, id1))
-            
+
             logs = cur.fetchall()
 
         if not logs:
@@ -1260,7 +1306,7 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 3. تنسيق الرسائل للعرض
         report = f"📜 **سجل آخر الرسائل بين:**\n🆔 `{id1}`\n🆔 `{id2}`\n"
         report += "─────────────────\n"
-        
+
         for msg in logs:
             sender_label = "👤 الطرف [1]" if msg['sender_id'] == id1 else "🚖 الطرف [2]"
             time_str = msg['created_at'].strftime('%H:%M')
@@ -1277,15 +1323,15 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    # 1. التأكد أن الرسالة ليست أمراً
-    if not update.message or (update.message.text and update.message.text.startswith("/")):
-        return
+    text = update.message.text
 
-    # 2. جلب الطرف الآخر
-    partner_id = get_chat_partner(user_id)
-    if not partner_id:
+    # 🛑 منع توجيه الأوامر أو زر الإنهاء للطرف الآخر
+    if text and (text.startswith('/') or text == "❌ إنهاء المحادثة"):
         return 
+
+    partner_id = get_chat_partner(user_id)
+    if not partner_id: return 
+
 
     # 3. تحديد نوع الرسالة يدوياً لتخزينه في القاعدة
     if update.message.text:
@@ -1353,37 +1399,65 @@ def run_flask():
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 
 def main():
+    # 1. تهيئة السيرفر وقاعدة البيانات
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
 
+    # 2. بناء التطبيق
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # 1. الأوامر (الأولوية القصوى)
+    # ---------------------------------------------------------
+    # الفئة الأولى: الأوامر (CommandHandlers) - لها أولوية قصوى
+    # ---------------------------------------------------------
     application.add_handler(CommandHandler("start", start_command))
-    
-    # أضف هذا الهاندلر لإلغاء الطلب إذا غير المستخدم رأيه
-    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
-    
-    # ... باقي الـ CommandHandlers (sub, cash, broadcast, logs) ...
+    application.add_handler(CommandHandler("end", end_chat_command))
+    application.add_handler(CommandHandler("send", admin_send_to_user)) # أمر الإدارة للإرسال
+    application.add_handler(CommandHandler("cash", admin_cash))
+    application.add_handler(CommandHandler("sub", admin_add_days))
+    application.add_handler(CommandHandler("broadcast", admin_broadcast))
+    application.add_handler(CommandHandler("logs", admin_get_logs))
 
-    # 2. الدردشة الوسيطة (Relay) - نعطيها Group 0 لكي لا تتصادم مع الـ Global
-    # ونضعها في الأعلى لكي يتم فحص "هل المستخدم في دردشة حالية؟" قبل أي شيء
+    # ---------------------------------------------------------
+    # الفئة الثانية: الأزرار النصية الحساسة (إنهاء، إلغاء)
+    # ---------------------------------------------------------
+    # يجب معالجة زر الإنهاء قبل الـ Relay لكي لا يتم إرساله كرسالة شات
+    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
+    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
+    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء المراسلة$"), start_command))
+
+    # ---------------------------------------------------------
+    # الفئة الثالثة: المحادثة المباشرة (Relay) - Group 0
+    # ---------------------------------------------------------
+    # هذا الهاندلر ينقل الرسائل بين الراكب والسائق إذا كان بينهما جلسة نشطة
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
         chat_relay_handler
     ), group=0)
 
-    # 3. المعالج الشامل (Global Handler) للحالات (Registration, Wait Details)
+    # ---------------------------------------------------------
+    # الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1
+    # ---------------------------------------------------------
+    # يعالج خطوات التسجيل، إدخال التفاصيل، السعر، وأزرار القائمة الرئيسية
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         global_handler
     ), group=1)
 
-    # 4. المعالجات العامة
+    # ---------------------------------------------------------
+    # الفئة الخامسة: المعالجات العامة (مواقع، قروبات، أزرار إنلاين)
+    # ---------------------------------------------------------
     application.add_handler(CallbackQueryHandler(handle_callbacks))
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    
+    # ماسح رسائل المجموعات (لتحويل طلبات القروب للبوت)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
+    
+    # ترحيب بالأعضاء الجدد في القروب
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
 
+    # 3. بدء تشغيل البوت
+    print("🚀 البوت يعمل الآن بنجاح...")
     application.run_polling(drop_pending_updates=True)
+
 if __name__ == '__main__':
     main()
