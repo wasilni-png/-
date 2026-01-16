@@ -529,12 +529,22 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- المعالج الشامل (Global Handler) ---
-
 async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
-    text = update.message.text
+    # السماح بمرور الرسائل النصية أو الرسائل التي تحتوي على موقع
+    if not update.message: return
+    
+    # إذا لم يكن هناك نص ولا موقع، اخرج (لتجنب الصور والملفات مثلاً)
+    if not update.message.text and not update.message.location:
+        return
+
     user_id = update.effective_user.id
     state = context.user_data.get('state')
+    text = update.message.text if update.message.text else ""
+
+    # الآن، إذا كان المستخدم أرسل موقعه وهو في حالة انتظار الموقع للطلب
+    if update.message.location and state == 'WAIT_LOCATION_FOR_ORDER':
+        # نقوم بتحويل المعالجة يدوياً لدالة الموقع لضمان عدم ضياع الطلب
+        return await location_handler(update, context)
 
     # --- 1. التواصل مع الإدارة ---
     if text == "📞 تواصل مع الإدارة":
