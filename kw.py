@@ -784,6 +784,16 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # مجرد تحديث عادي للموقع
         await update.message.reply_text("📍 تم تحديث موقعك بنجاح.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
 
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    user_id = update.effective_user.id
+
+    # محاولة إغلاق مؤشر التحميل لتجنب التعليق
+    try:
+        await query.answer()
+    except:
+        pass
     # ===============================================================
     # 1. القائمة الرئيسية للبحث (أقرب كابتن vs بحث بالأحياء)
     # ===============================================================
