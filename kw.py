@@ -728,37 +728,44 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     location = update.message.location
     state = context.user_data.get('state')
 
-    # 1. تحديث الإحداثيات في الذاكرة (Cache)
+    # 1. تحديث الإحداثيات في الذاكرة الحية
     context.user_data['lat'] = location.latitude
     context.user_data['lon'] = location.longitude
 
-    # 2. تحديث الإحداثيات في قاعدة البيانات (في الخلفية)
+    # 2. تحديث قاعدة البيانات في الخلفية
     threading.Thread(target=update_db_location, args=(user_id, location.latitude, location.longitude)).start()
 
-    # 3. معالجة الطلب إذا كان المستخدم في حالة "انتظار الموقع للطلب"
-    if state == 'WAIT_LOCATION_FOR_ORDER':
-        processing_msg = await update.message.reply_text("📡 جاري البحث عن كباتن في نطاق 5 كم...")
-        
-        # استدعاء دالة الإرسال الجماعي
+    # 3. جلب بيانات المستخدم لمعرفة رتبته (سائق أم راكب)
+    await sync_all_users() # لضمان أن البيانات محدثة
+    user_data = USER_CACHE.get(user_id, {})
+    user_role = user_data.get('role', 'rider') # القيمة الافتراضية راكب إذا لم يوجد
+    is_verified = user_data.get('is_verified', False)
+
+    # 4. معالجة طلب الرحلة (للركاب فقط)
+    if state == 'WAIT_LOCATION_FOR_ORDER' and user_role == 'rider':
+        processing_msg = await update.message.reply_text("📡 جاري البحث عن كباتن...")
         count = await broadcast_general_order(update, context)
         
         if count > 0:
             await processing_msg.edit_text(
-                f"✅ تم إرسال طلبك إلى **{count}** كابتن قريب.\n"
-                "يرجى الانتظار، سيتم إشعارك فور قبول أحدهم للطلب.",
+                f"✅ تم إرسال طلبك إلى **{count}** كابتن.",
                 reply_markup=get_main_kb("rider", True)
             )
         else:
             await processing_msg.edit_text(
-                "⚠️ للأسف، لا يوجد كباتن متاحين حالياً في هذا النطاق.\nجرب البحث عن طريق 'كابتن نخبة' (بالأحياء).",
+                "⚠️ لا يوجد كباتن متاحين حالياً.",
                 reply_markup=get_main_kb("rider", True)
             )
-        
-        # إنهاء الحالة
         context.user_data['state'] = None
+
+    # 5. إذا كان المرسل سائقاً يحدّث موقعه أو راكباً يحدّث موقعه خارج عملية الطلب
     else:
-        # مجرد تحديث عادي للموقع
-        await update.message.reply_text("📍 تم تحديث موقعك بنجاح.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
+        # هنا السر: نرسل الكيبورد المناسب لرتبة المستخدم الفعلية
+        await update.message.reply_text(
+            "📍 تم تحديث موقعك بنجاح في النظام.",
+            reply_markup=get_main_kb(user_role, is_verified)
+        )
+
 
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
