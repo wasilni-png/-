@@ -1299,7 +1299,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 matched_drivers.append(d)
 
     # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
-        if matched_drivers:
+    if matched_drivers:
         keyboard = []
         for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
             driver_id = d['user_id']
