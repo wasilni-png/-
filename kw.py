@@ -1420,44 +1420,41 @@ def main():
     # 2. بناء التطبيق
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # --- الفئة الأولى: الأوامر ---
+    # --- الفئة الأولى: الأوامر (أولوية قصوى) ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("end", end_chat_command))
-    application.add_handler(CommandHandler("send", admin_send_to_user))
-    application.add_handler(CommandHandler("cash", admin_cash))
-    application.add_handler(CommandHandler("sub", admin_add_days))
-    application.add_handler(CommandHandler("broadcast", admin_broadcast))
-    application.add_handler(CommandHandler("logs", admin_get_logs))
+    # ... (بقية الأوامر) ...
 
     # --- الفئة الثانية: الأزرار النصية الحساسة ---
-    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
-    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
-    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء المراسلة$"), start_command))
+    application.add_handler(MessageHandler(filters.Regex("^❌"), start_command))
 
-    # --- الفئة الثالثة: المحادثة المباشرة (Relay) - Group 0 ---
+    # --- الفئة الثالثة: المواقع (يجب أن تكون هنا قبل الـ Relay والـ Global) ---
+    # وضعناها في Group=0 لتقطع الطريق على أي معالج عام
+    application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=0)
+
+    # --- الفئة الرابعة: المحادثة المباشرة (Relay) ---
+    # أضفنا استثناء للموقع لكي لا "يسرقه" الريلي
     application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌"),
+        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.LOCATION & ~filters.Regex("^❌"),
         chat_relay_handler
-    ), group=0)
+    ), group=1)
 
-    # --- الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1 ---
+    # --- الفئة الخامسة: المعالج الشامل (Global) ---
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         global_handler
-    ), group=1)
+    ), group=2)
 
-    # --- الفئة الخامسة: أزرار الإنلاين (Callback) والمواقع ---
-    # فصلنا التسجيل بنمط خاص لضمان عمله فوراً
+    # --- الفئة السادسة: أزرار الإنلاين ---
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
     
-    application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    # معالجات المجموعات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
 
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنجاح...")
     application.run_polling(drop_pending_updates=True)
-
 if __name__ == '__main__':
     main()
