@@ -166,6 +166,21 @@ def get_distance(lat1, lon1, lat2, lon2):
     except (ValueError, TypeError):
         return 999999
 
+def update_db_location(user_id, lat, lon):
+    """دالة مساعدة لتحديث موقع المستخدم في الخلفية"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        with conn.cursor() as cur:
+            # تحديث الإحداثيات للمستخدم
+            cur.execute("UPDATE users SET lat = %s, lon = %s WHERE user_id = %s", (lat, lon, user_id))
+            conn.commit()
+    except Exception as e:
+        print(f"Error updating location for {user_id}: {e}")
+    finally:
+        conn.close()
+
+
 async def sync_all_users():
     """تحديث الذاكرة المؤقتة من قاعدة البيانات"""
     global USER_CACHE, CACHED_DRIVERS, LAST_CACHE_SYNC
@@ -437,54 +452,46 @@ async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال الطلب للكباتن في نطاق 5 كم فقط"""
     
-    # 1. محاولة جلب الموقع من الرسالة مباشرة (أكثر دقة فور إرسال الموقع)
+    # محاولة جلب الموقع من الرسالة الحالية أو من الذاكرة
     if update.message and update.message.location:
         r_lat = update.message.location.latitude
         r_lon = update.message.location.longitude
     else:
-        # إذا لم يتوفر في الرسالة، نبحث في الذاكرة
         r_lat = context.user_data.get('lat')
         r_lon = context.user_data.get('lon')
 
-    # 2. التحقق النهائي من وجود الإحداثيات
+    # إذا لم نجد إحداثيات، نوقف العملية
     if r_lat is None or r_lon is None:
-        await update.message.reply_text("❌ عذراً، تعذر الحصول على إحداثيات موقعك. حاول إرسال الموقع مرة أخرى.")
         return 0
 
     price = context.user_data.get('order_price', 0)
-    # تفاصيل المشوار التي كتبها المستخدم في الخطوة الأولى
     details = context.user_data.get('search_district', "موقع GPS")
+    rider_id = update.effective_user.id
 
     count = 0
-    await sync_all_users() # تحديث قائمة الكباتن من الذاكرة
+    await sync_all_users() # تحديث القائمة
 
     for d in CACHED_DRIVERS:
-        # تجاهل الكابتن الذي لا يملك إحداثيات أو المحظور
-        if d.get('lat') is None or d.get('is_blocked'): 
+        # لا ترسل الطلب لنفسك، وتأكد أن الكابتن لديه موقع مسجل
+        if d['user_id'] == rider_id or d.get('lat') is None: 
             continue
 
-        # حساب المسافة الحقيقية
+        # حساب المسافة
         dist = get_distance(r_lat, r_lon, d['lat'], d['lon'])
 
-        # 🎯 الفلترة على مسافة 5 كم فقط
         if dist <= 5.0: 
-            warning = ""
-            # تنبيه للكابتن إذا كان رصيده منخفضاً أو غير موثق
-            if not d.get('is_verified') or d.get('balance', 0) <= 0:
-                warning = "\n⚠️ **تنبيه:** يرجى شحن رصيدك لتجنب إيقاف الخدمة."
-
+            # تجهيز زر القبول
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ قبول الرحلة", callback_data=f"accept_gen_{update.effective_user.id}_{price}")
+                InlineKeyboardButton(f"✅ قبول ({price} ريال)", callback_data=f"accept_gen_{rider_id}_{price}")
             ]])
 
             try:
                 await context.bot.send_message(
                     chat_id=d['user_id'],
-                    text=(f"🚖 **طلب رحلة قريب منك (نطاق 5 كم)!**\n\n"
-                          f"📍 التفاصيل: {details}\n"
-                          f"💰 السعر: {price} ريال\n"
-                          f"📏 يبعد عنك: {dist:.1f} كم"
-                          f"{warning}"),
+                    text=(f"🚨 **طلب جديد قريب منك!**\n\n"
+                          f"📍 المسافة: {dist:.1f} كم\n"
+                          f"📝 الوجهة: {details}\n"
+                          f"💰 السعر: {price} ريال"),
                     reply_markup=kb,
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -493,7 +500,6 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
                 continue
 
     return count
-
 
 async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -746,39 +752,37 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     location = update.message.location
     state = context.user_data.get('state')
 
-    # تحديث الإحداثيات في الذاكرة
+    # 1. تحديث الإحداثيات في الذاكرة (Cache)
     context.user_data['lat'] = location.latitude
     context.user_data['lon'] = location.longitude
 
-    # تحديث قاعدة البيانات في الخلفية
+    # 2. تحديث الإحداثيات في قاعدة البيانات (في الخلفية)
     threading.Thread(target=update_db_location, args=(user_id, location.latitude, location.longitude)).start()
 
-    # تنفيذ الإرسال الجماعي إذا كانت الحالة صحيحة
+    # 3. معالجة الطلب إذا كان المستخدم في حالة "انتظار الموقع للطلب"
     if state == 'WAIT_LOCATION_FOR_ORDER':
-        # استدعاء دالة الإرسال الجماعي (broadcast_general_order)
-        await broadcast_general_order(update, context)
+        processing_msg = await update.message.reply_text("📡 جاري البحث عن كباتن في نطاق 5 كم...")
         
-        # تصفير الحالة وإعادة الكيبورد الرئيسي
+        # استدعاء دالة الإرسال الجماعي
+        count = await broadcast_general_order(update, context)
+        
+        if count > 0:
+            await processing_msg.edit_text(
+                f"✅ تم إرسال طلبك إلى **{count}** كابتن قريب.\n"
+                "يرجى الانتظار، سيتم إشعارك فور قبول أحدهم للطلب.",
+                reply_markup=get_main_kb("rider", True)
+            )
+        else:
+            await processing_msg.edit_text(
+                "⚠️ للأسف، لا يوجد كباتن متاحين حالياً في هذا النطاق.\nجرب البحث عن طريق 'كابتن نخبة' (بالأحياء).",
+                reply_markup=get_main_kb("rider", True)
+            )
+        
+        # إنهاء الحالة
         context.user_data['state'] = None
-        await update.message.reply_text(
-            "🚀 تم إرسال طلبك لجميع الكباتن القريبين منك.\nيرجى الانتظار، سيتواصل معك الكابتن الذي يقبل العرض.",
-            reply_markup=get_main_kb("rider", True)
-        )
     else:
-        await update.message.reply_text("📍 تم تحديث موقعك بنجاح في النظام.")
-
-
-# --- معالجة الأزرار (Callbacks) ---
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    user_id = update.effective_user.id
-
-    # محاولة إغلاق مؤشر التحميل لتجنب التعليق
-    try:
-        await query.answer()
-    except:
-        pass
+        # مجرد تحديث عادي للموقع
+        await update.message.reply_text("📍 تم تحديث موقعك بنجاح.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
 
     # ===============================================================
     # 1. القائمة الرئيسية للبحث (أقرب كابتن vs بحث بالأحياء)
@@ -1145,40 +1149,63 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خطأ: /cash [ID] [Amount]")
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: 
-        return
+    if not update.message or not update.message.text: return
 
-    # استخراج البيانات الأساسية
     user = update.effective_user
-    chat = update.effective_chat
     text = update.message.text.lower()
-    # تنظيف النص لتوحيد البحث
     msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-    # 1️⃣ فحص الكلمات الممنوعة (الطلبات الشهرية)
-    FORBIDDEN_KEYWORDS = ["شهري", "عقد", "استئجار"]
+    # 1. منع الطلبات الشهرية
+    FORBIDDEN = ["شهري", "عقد", "راتب"]
+    if any(k in msg_clean for k in FORBIDDEN):
+        try: await update.message.delete()
+        except: pass
+        await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة في القروب، تواصل مع الإدارة.")
+        return
 
-    if any(k in msg_clean for k in FORBIDDEN_KEYWORDS):
-        try:
-            await update.message.delete()
-        except Exception as e:
-            print(f"خطأ في حذف الرسالة: {e}")
+    # 2. الكشف عن طلبات المشاوير
+    KEYWORDS = ["توصيل", "مشوار", "مطلوب", "ابي", "بغيت"]
+    if not any(k in msg_clean for k in KEYWORDS):
+        return
 
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=f"عذراً {user.first_name}، العروض الشهرية تُرسل للإدارة للمراجعة."
+    # 3. البحث في الأحياء
+    await sync_all_users()
+    matched = []
+    found_dist = ""
+    
+    # اسم البوت لعمل الرابط
+    bot_username = context.bot.username
+
+    for d in CACHED_DRIVERS:
+        if d.get('districts'):
+            # تنظيف وفحص
+            d_dists = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
+            for dist in d_dists:
+                if len(dist) > 2 and dist in msg_clean:
+                    matched.append(d)
+                    found_dist = dist
+                    break
+    
+    # 4. الرد في القروب
+    if matched:
+        keyboard = []
+        for d in matched[:5]:
+            # رابط ديب لينك ينقل للبوت مع كود الطلب
+            # req_DRIVERID_DISTRICT
+            deep_link = f"https://t.me/{bot_username}?start=req_{d['user_id']}_{found_dist}"
+            keyboard.append([InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=deep_link)])
+            
+            # تنبيه الكابتن (اختياري)
+            try:
+                await context.bot.send_message(d['user_id'], f"🔔 تنبيه: طلب في القروب لحي {found_dist}")
+            except: pass
+
+        await update.message.reply_text(
+            f"✅ **وجدنا كباتن في {found_dist}:**\nاضغط لطلب الكابتن عبر البوت لضمان حقك:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
         )
 
-        # إرسال للآدمنز (لاحظ الإزاحة هنا: يجب أن تكون داخل الـ if)
-        for admin in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin, 
-                    text=f"⚠️ **طلب مشوار شهري جديد:**\n\n👤 من: {user.first_name}\n📝 النص: {update.message.text}\n📍 المصدر: {chat.title}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except: pass
-        return  # يتوقف البوت هنا فقط إذا كانت الرسالة "شهرية"
     # --- داخل دالة group_order_scanner ---
     districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
 
