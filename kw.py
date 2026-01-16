@@ -460,9 +460,9 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
 
         dist = get_distance(r_lat, r_lon, d['lat'], d['lon'])
 
-        if dist <= 50: # نطاق 50 كم
+        if dist <= 5: # نطاق 50 كم
             warning = ""
-            if not d.get('is_verified') or d.get('balance', 0) <= -50:
+            if not d.get('is_verified') or d.get('balance', 0) <= -5:
                 warning = "\n⚠️ **تنبيه:** يجب تسديد العمولة بعد الرحلة."
 
             kb = InlineKeyboardMarkup([[
@@ -686,52 +686,59 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"👤 الكابتن: {d['name']}\n🚗 {d['car_info']}", reply_markup=kb)
         context.user_data['state'] = None
         return
-
-    if state == 'WAIT_GENERAL_DISTRICT':
-        context.user_data['search_district'] = text
-        await update.message.reply_text("💰 **كم السعر المعروض؟** (أرقام فقط)")
+    # الخطوة 1: استلام تفاصيل الطلب العام
+    if state == 'WAIT_GENERAL_DETAILS':
+        context.user_data['search_district'] = text  # تخزين التفاصيل كـ "وصف للموقع"
         context.user_data['state'] = 'WAIT_GENERAL_PRICE'
+        await update.message.reply_text("💰 **كم السعر الذي تعرضه لهذا المشوار؟**")
         return
 
+    # الخطوة 2: استلام السعر وطلب الموقع عبر زر
     if state == 'WAIT_GENERAL_PRICE':
         try:
             context.user_data['order_price'] = float(text)
-            kb = ReplyKeyboardMarkup([[KeyboardButton("📍 مشاركة موقعي", request_location=True)]], one_time_keyboard=True, resize_keyboard=True)
-            await update.message.reply_text("📍 الآن شارك موقعك لإرسال الطلب:", reply_markup=kb)
+            # إظهار زر مشاركة الموقع كما طلبت
+            kb = ReplyKeyboardMarkup([
+                [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
+                [KeyboardButton("❌ إلغاء الطلب")]
+            ], resize_keyboard=True, one_time_keyboard=True)
+            
+            await update.message.reply_text(
+                "📍 ممتاز، الآن اضغط على الزر بالأسفل **لإرسال موقعك** وتعميم الطلب على الكباتن:",
+                reply_markup=kb
+            )
             context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER'
-        except:
-            await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
+        except ValueError:
+            await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط.")
         return
 
 # --- معالجة المواقع (Location) ---
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    lat = update.message.location.latitude
-    lon = update.message.location.longitude
+    location = update.message.location
     state = context.user_data.get('state')
 
-    # تحديث الموقع في الذاكرة والقاعدة
-    context.user_data['lat'] = lat
-    context.user_data['lon'] = lon
-    threading.Thread(target=update_db_location, args=(user_id, lat, lon)).start()
+    # تحديث الإحداثيات في الذاكرة
+    context.user_data['lat'] = location.latitude
+    context.user_data['lon'] = location.longitude
 
-    # إذا كان المستخدم في مسار "أقرب كابتن"
-    if state == 'WAIT_LOCATION': 
-        context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
-        await update.message.reply_text(
-            "📍 تم تحديد موقعك بنجاح.\n\n"
-            "📝 يرجى كتابة **تفاصيل المشوار والسعر المقترح** الآن:\n"
-            "مثال: (من حي العزيزية إلى المطار - 50 ريال)",
-            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True)
-        )
-    # إذا كان المستخدم يطلب رحلة عامة بعد تحديد السعر (حالتك القديمة)
-    elif state == 'WAIT_LOCATION_FOR_ORDER':
+    # تحديث قاعدة البيانات في الخلفية
+    threading.Thread(target=update_db_location, args=(user_id, location.latitude, location.longitude)).start()
+
+    # تنفيذ الإرسال الجماعي إذا كانت الحالة صحيحة
+    if state == 'WAIT_LOCATION_FOR_ORDER':
+        # استدعاء دالة الإرسال الجماعي (broadcast_general_order)
         await broadcast_general_order(update, context)
+        
+        # تصفير الحالة وإعادة الكيبورد الرئيسي
         context.user_data['state'] = None
-        await update.message.reply_text("🚀 تم تعميم طلبك على الكباتن القريبين.", reply_markup=get_main_kb("rider", True))
+        await update.message.reply_text(
+            "🚀 تم إرسال طلبك لجميع الكباتن القريبين منك.\nيرجى الانتظار، سيتواصل معك الكابتن الذي يقبل العرض.",
+            reply_markup=get_main_kb("rider", True)
+        )
     else:
-        await update.message.reply_text("✅ تم تحديث إحداثياتك بنجاح.")
+        await update.message.reply_text("📍 تم تحديث موقعك بنجاح في النظام.")
 
 
 # --- معالجة الأزرار (Callbacks) ---
@@ -1022,12 +1029,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # 2. عند اختيار "أقرب كابتن (بحث بالموقع)"
-    elif data == "order_general":
-        # نطلب من المستخدم إرسال موقعه GPS
-        context.user_data['state'] = 'WAIT_LOCATION' # تفعيل حالة انتظار الموقع
+        elif data == "order_general":
+        context.user_data['state'] = 'WAIT_GENERAL_DETAILS' 
         await query.edit_message_text(
             "🌍 **البحث عن أقرب كابتن:**\n\n"
-            "يرجى الضغط على زر (📍 موقعي) في القائمة السفلى أو إرسال موقعك عبر (Location) الآن.",
+            "📝 يرجى كتابة **تفاصيل مشوارك** الآن (من وين لوين؟):",
             parse_mode=ParseMode.MARKDOWN
         )
 
