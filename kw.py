@@ -536,9 +536,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = context.user_data.get('state')
 
-    # ---------------------------------------------------------
-    # 1. التواصل مع الإدارة
-    # ---------------------------------------------------------
+    # --- 1. التواصل مع الإدارة ---
     if text == "📞 تواصل مع الإدارة":
         await contact_admin_start(update, context)
         return
@@ -549,12 +547,11 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
             return
         
-        # إرسال للأدمن
         for aid in ADMIN_IDS:
             try:
                 await context.bot.send_message(
                     chat_id=aid,
-                    text=f"📩 **رسالة دعم جديدة**\nمن: {update.effective_user.first_name}\nID: `{user_id}`\n\n💬 النص: {text}\n\nللرد: `/send {user_id} رسالتك`",
+                    text=f"📩 **رسالة دعم جديدة**\nمن: {update.effective_user.first_name}\nID: `{user_id}`\n\n💬 النص: {text}",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except: pass
@@ -562,124 +559,95 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         return
 
-    # ---------------------------------------------------------
-    # 2. خطوات التسجيل
-    # ---------------------------------------------------------
+    # --- 2. إصلاح خطوات التسجيل ---
     if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
-        await update.message.reply_text("📱 **الآن أرسل رقم جوالك:**")
+        await update.message.reply_text("📱 **الخطوة 2/3:**\nأرسل رقم جوالك للتواصل:")
         context.user_data['state'] = 'WAIT_PHONE'
         return
 
     if state == 'WAIT_PHONE':
         context.user_data['reg_phone'] = text
         role = context.user_data.get('reg_role')
+        
         if role == 'driver':
-            await update.message.reply_text("🚗 **أخيراً، ما هو نوع وموديل سيارتك؟**\n(مثال: كامري 2020)")
+            # إذا كان سائق، نطلب السيارة
+            await update.message.reply_text("🚗 **الخطوة الأخيرة:**\nما هو نوع وموديل سيارتك؟ (مثال: كامري 2023)")
             context.user_data['state'] = 'WAIT_CAR'
         else:
+            # إذا كان راكب، ننهي التسجيل فوراً
             await complete_registration(update, context, context.user_data['reg_name'])
             context.user_data['state'] = None
         return
 
     if state == 'WAIT_CAR':
         context.user_data['reg_car'] = text
+        # إكمال تسجيل السائق
         await complete_registration(update, context, context.user_data['reg_name'])
         context.user_data['state'] = None
         return
 
-    # ---------------------------------------------------------
-    # 3. معالجة طلب مشوار "خاص" (لكابتن محدد)
-    # ---------------------------------------------------------
-    # الخطوة 1: استلام تفاصيل المشوار الخاص
+    # --- 3. طلب مشوار خاص (كابتن محدد) ---
     if state == 'WAIT_TRIP_DETAILS':
         context.user_data['trip_details'] = text 
-        context.user_data['state'] = 'WAIT_TRIP_PRICE' # الانتقال لطلب السعر
-
-        await update.message.reply_text(
-            "✅ تم استلام التفاصيل.\n\n"
-            "💰 **الآن، كم السعر الذي تعرضه لهذا المشوار؟**\n"
-            "(أدخل أرقاماً فقط، مثال: 35)",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        context.user_data['state'] = 'WAIT_TRIP_PRICE'
+        await update.message.reply_text("💰 **كم السعر المعروض؟** (أرقام فقط):")
         return
 
-    # الخطوة 2: استلام السعر وإرسال الطلب للكابتن المحدد
     if state == 'WAIT_TRIP_PRICE':
         try:
             price = float(text)
             details = context.user_data.get('trip_details')
-            driver_id = context.user_data.get('driver_to_order') # الآيدي المخزن عند ضغط الزر
-            dist_name = context.user_data.get('order_dist')
-            commission = price * 0.10  # حساب العمولة 10%
-
-            # إرسال الطلب للكابتن في الخاص
+            driver_id = context.user_data.get('driver_to_order')
+            
+            # إرسال الطلب للكابتن
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ قبول ودفع عمولة {commission}ر.س", 
-                                     callback_data=f"accept_ride_{user_id}_{price}"),
+                [InlineKeyboardButton("✅ قبول الطلب", callback_data=f"accept_ride_{user_id}_{price}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{user_id}")]
             ])
-
             try:
                 await context.bot.send_message(
                     chat_id=driver_id,
-                    text=(f"🔔 **طلب مشوار خاص جديد!**\n\n"
-                          f"👤 العميل: {update.effective_user.first_name}\n"
-                          f"📍 الحي: {dist_name}\n"
-                          f"📋 التفاصيل: {details}\n"
-                          f"💰 السعر المعروض: {price} ريال\n"
-                          f"📉 العمولة المستقطعة: {commission} ريال"),
-                    reply_markup=kb,
-                    parse_mode=ParseMode.MARKDOWN
+                    text=f"🔔 **طلب خاص لك!**\nتفاصيل: {details}\nالسعر: {price} ريال",
+                    reply_markup=kb
                 )
-                await update.message.reply_text(
-                    f"✅ تم إرسال طلبك للكابتن بسعر **{price} ريال**.\n"
-                    "سأقوم بإبلاغك فور قبوله للطلب."
-                )
-            except Exception as e:
-                await update.message.reply_text("❌ تعذر الوصول للكابتن (ربما قام بحظر البوت).")
+                await update.message.reply_text("✅ تم إرسال العرض للكابتن، انتظر الموافقة.")
+            except:
+                await update.message.reply_text("❌ تعذر الوصول للكابتن.")
             
             context.user_data['state'] = None 
-
         except ValueError:
-            await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط (مثال: 40).")
+            await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
         return
 
-    # ---------------------------------------------------------
-    # 4. معالجة طلب مشوار "عام" (بالموقع GPS)
-    # ---------------------------------------------------------
-    
-    # الخطوة 1: استلام تفاصيل الطلب العام
+    # --- 4. طلب مشوار عام (GPS) ---
     if state == 'WAIT_GENERAL_DETAILS':
-        context.user_data['search_district'] = text  # تخزين التفاصيل
+        context.user_data['search_district'] = text
         context.user_data['state'] = 'WAIT_GENERAL_PRICE'
-        await update.message.reply_text(
-            "💰 **كم السعر الذي تعرضه لهذا المشوار؟**\n(يرجى كتابة رقم فقط)"
-        )
+        await update.message.reply_text("💰 **كم السعر المقترح؟** (أرقام فقط):")
         return
 
-    # الخطوة 2: استلام السعر وطلب الموقع عبر زر
     if state == 'WAIT_GENERAL_PRICE':
         try:
             context.user_data['order_price'] = float(text)
             
-            # إظهار زر مشاركة الموقع
             kb = ReplyKeyboardMarkup([
-                [KeyboardButton("📍 مشاركة موقعي الآن", request_location=True)],
+                [KeyboardButton("📍 مشاركة موقعي لإرسال الطلب", request_location=True)],
                 [KeyboardButton("❌ إلغاء الطلب")]
             ], resize_keyboard=True, one_time_keyboard=True)
             
             await update.message.reply_text(
-                "📍 ممتاز، الآن اضغط على الزر بالأسفل **(مشاركة موقعي الآن)** لتعميم الطلب على الكباتن القريبين (5 كم):",
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN
+                "📍 الآن اضغط الزر بالأسفل لمشاركة موقعك وتعميم الطلب:",
+                reply_markup=kb
             )
-            context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER' # هذه الحالة تستقبلها دالة location_handler
+            # هذه الحالة ستلتقطها دالة location_handler المصححة
+            context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER' 
         except ValueError:
-            await update.message.reply_text("⚠️ يرجى إدخال السعر كأرقام فقط.")
+            await update.message.reply_text("⚠️ أرقام فقط.")
         return
 
-    # ---------------------------------------------------------
+    # --- 5. القائمة الرئيسية ---
+     ---------------------------------------------------------
     # 5. أوامر القائمة الرئيسية (Main Menu)
     # ---------------------------------------------------------
     if text == "🚖 طلب رحلة":
