@@ -1029,7 +1029,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # 2. عند اختيار "أقرب كابتن (بحث بالموقع)"
-        elif data == "order_general":
+    elif data == "order_general":
         context.user_data['state'] = 'WAIT_GENERAL_DETAILS' 
         await query.edit_message_text(
             "🌍 **البحث عن أقرب كابتن:**\n\n"
