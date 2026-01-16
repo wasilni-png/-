@@ -1402,7 +1402,6 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
-
 def main():
     # 1. تهيئة السيرفر وقاعدة البيانات
     threading.Thread(target=run_flask, daemon=True).start()
@@ -1411,57 +1410,42 @@ def main():
     # 2. بناء التطبيق
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # ---------------------------------------------------------
-    # الفئة الأولى: الأوامر (CommandHandlers) - لها أولوية قصوى
-    # ---------------------------------------------------------
+    # --- الفئة الأولى: الأوامر ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("end", end_chat_command))
-    application.add_handler(CommandHandler("send", admin_send_to_user)) # أمر الإدارة للإرسال
+    application.add_handler(CommandHandler("send", admin_send_to_user))
     application.add_handler(CommandHandler("cash", admin_cash))
     application.add_handler(CommandHandler("sub", admin_add_days))
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
     application.add_handler(CommandHandler("logs", admin_get_logs))
 
-    # ---------------------------------------------------------
-    # الفئة الثانية: الأزرار النصية الحساسة (إنهاء، إلغاء)
-    # ---------------------------------------------------------
-    # يجب معالجة زر الإنهاء قبل الـ Relay لكي لا يتم إرساله كرسالة شات
+    # --- الفئة الثانية: الأزرار النصية الحساسة ---
     application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
     application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
     application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء المراسلة$"), start_command))
 
-    # ---------------------------------------------------------
-    # الفئة الثالثة: المحادثة المباشرة (Relay) - Group 0
-    # ---------------------------------------------------------
-    # هذا الهاندلر ينقل الرسائل بين الراكب والسائق إذا كان بينهما جلسة نشطة
+    # --- الفئة الثالثة: المحادثة المباشرة (Relay) - Group 0 ---
     application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إنهاء المحادثة$"),
+        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌"),
         chat_relay_handler
     ), group=0)
 
-    # ---------------------------------------------------------
-    # الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1
-    # ---------------------------------------------------------
-    # يعالج خطوات التسجيل، إدخال التفاصيل، السعر، وأزرار القائمة الرئيسية
+    # --- الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1 ---
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         global_handler
     ), group=1)
 
-    # ---------------------------------------------------------
-    # الفئة الخامسة: المعالجات العامة (مواقع، قروبات، أزرار إنلاين)
-    # ---------------------------------------------------------
+    # --- الفئة الخامسة: أزرار الإنلاين (Callback) والمواقع ---
+    # فصلنا التسجيل بنمط خاص لضمان عمله فوراً
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
+    
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
-    
-    # ماسح رسائل المجموعات (لتحويل طلبات القروب للبوت)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
-    
-    # ترحيب بالأعضاء الجدد في القروب
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
 
-    # 3. بدء تشغيل البوت
+    # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنجاح...")
     application.run_polling(drop_pending_updates=True)
 
