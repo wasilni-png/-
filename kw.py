@@ -180,6 +180,26 @@ def update_db_location(user_id, lat, lon):
     finally:
         conn.close()
 
+def update_districts_in_db(user_id, districts_str):
+    """تحديث عمود الأحياء في سوبابيز"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET districts = %s WHERE user_id = %s",
+                (districts_str, user_id)
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ خطأ تحديث الأحياء: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+
 
 async def sync_all_users():
     """تحديث الذاكرة المؤقتة من قاعدة البيانات"""
