@@ -647,9 +647,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- 5. القائمة الرئيسية ---
-     ---------------------------------------------------------
-    # 5. أوامر القائمة الرئيسية (Main Menu)
-    # ---------------------------------------------------------
+    # 5. أوامر القائمة الرئيسية (Main Menu
     if text == "🚖 طلب رحلة":
         await order_ride_options(update, context)
         return
