@@ -672,10 +672,11 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"💳 رصيدك الحالي: {bal} ريال")
         return
 
-    if text == "📝 تحديث الأحياء":
-        await update.message.reply_text("✍️ أرسل أسماء الأحياء التي تعمل بها مفصولة بفواصل:")
-        context.user_data['state'] = 'WAIT_DISTRICTS'
+        # استبدال الكود القديم بهذا
+    if text == "📍 مناطق عملي" or text == "📝 تحديث الأحياء":
+        await districts_settings_view(update, context)
         return
+
 
     if text == "ℹ️ حالة اشتراكي":
         user = USER_CACHE.get(user_id)
@@ -892,6 +893,42 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # --- منطق تبديل الأحياء ---
+    if data.startswith("toggle_dist_"):
+        dist_name = data.replace("toggle_dist_", "")
+        user_id = update.effective_user.id
+        
+        # البحث عن الكابتن في الكاش لتعديله
+        for d in CACHED_DRIVERS:
+            if d['user_id'] == user_id:
+                # تحويل النص الحالي لقائمة
+                current_list = [x.strip() for x in d.get('districts', "").replace("،", ",").split(",") if x.strip()]
+                
+                if dist_name in current_list:
+                    current_list.remove(dist_name) # حذف
+                else:
+                    current_list.append(dist_name) # إضافة
+                
+                # تحديث النص (String)
+                new_districts_str = "، ".join(current_list)
+                d['districts'] = new_districts_str
+                
+                # تحديث سوبابيز فوراً
+                update_districts_in_db(user_id, new_districts_str)
+                break
+        
+        # إعادة عرض الأزرار لتظهر العلامات المحدثة
+        await districts_settings_view(update, context)
+        return
+
+    elif data == "save_districts":
+        await query.answer("✅ تم حفظ الأحياء في نظام سوبابيز")
+        await query.edit_message_text("🚀 تم تحديث أحيائك! ستصلك تنبيهات القروب بناءً على اختياراتك الآن.")
+        await sync_all_users() # مزامنة نهائية للكاش
+        return
+
+
+
     # ===============================================================
     # 4. قبول الكابتن للطلب (عام أو خاص)
     # ===============================================================
@@ -1050,6 +1087,44 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تحديث الكاش
         await sync_all_users()
         return
+
+
+
+
+async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    
+    # 1. جلب بيانات السائق من الكاش
+    driver = next((d for d in CACHED_DRIVERS if d['user_id'] == user_id), None)
+    
+    # تحويل نص الأحياء من قاعدة البيانات إلى قائمة للمقارنة
+    current_districts = []
+    if driver and driver.get('districts'):
+        current_districts = [d.strip() for d in driver['districts'].replace("،", ",").split(",") if d.strip()]
+
+    # 2. بناء الأزرار
+    all_districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    keyboard = []
+    
+    for i in range(0, len(all_districts), 2):
+        row = []
+        for j in range(2):
+            if i + j < len(all_districts):
+                dist_name = all_districts[i + j]
+                # وضع علامة ✅ إذا كان الحي مختاراً
+                status = "✅ " if dist_name in current_districts else "⬜ "
+                row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="save_districts")])
+
+    text = "📍 **إعدادات نطاق العمل:**\n\nاختر الأحياء التي تعمل بها ليتم إشعارك بطلباتها في القروب والخاص."
+    
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 
 # --- أوامر الأدمن ---
