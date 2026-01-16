@@ -1412,7 +1412,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
- Def main():
+Def main():
     # 1. تهيئة السيرفر وقاعدة البيانات
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
