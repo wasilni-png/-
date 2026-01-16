@@ -1299,20 +1299,23 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 matched_drivers.append(d)
 
     # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
-    if matched_drivers:
+        if matched_drivers:
         keyboard = []
         for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
-            # رابط Deep Link يفتح البوت @Fogtyjnbot ويبدأ الطلب فوراً
-            # التنسيق: req_DRIVERID_DISTRICT
+            driver_id = d['user_id']
+            # رابط Deep Link يفتح البوت ويبدأ الطلب
             deep_link = f"https://t.me/Fogtyjnbot?start=req_{driver_id}"
+            
+            # تصحيح السطر أدناه: إضافة اسم الكابتن وإغلاق علامات التنصيص والقوس
             keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
 
         await update.message.reply_text(
-            f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n"
-            "اضغط على الكابتن لإرسال تفاصيل مشوارك في الخاص:",
+            f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n\n"
+            "اضغط على اسم الكابتن ثم اضغط (ابدأ/Start) واكتب تفاصيل مشوارك داخل البوت:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
+
         
         # 7. تنبيه الكباتن في الخاص فوراً لزيادة سرعة الاستجابة
         for d in matched_drivers:
