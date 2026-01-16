@@ -1142,126 +1142,91 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خطأ: /cash [ID] [Amount]")
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # تجاهل الرسائل التي لا تحتوي على نص أو ليست في مجموعة
     if not update.message or not update.message.text: return
+    if update.message.chat.type == "private": return
 
     user = update.effective_user
     text = update.message.text.lower()
+    # تنظيف النص لتوحيد البحث (التاء المربوطة والهمزات)
     msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-    # 1. منع الطلبات الشهرية
+    # 1. منع الطلبات الشهرية فوراً
     FORBIDDEN = ["شهري", "عقد", "راتب"]
     if any(k in msg_clean for k in FORBIDDEN):
         try: await update.message.delete()
         except: pass
-        await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة في القروب، تواصل مع الإدارة.")
+        await context.bot.send_message(user.id, "⚠️ نعتذر، الطلبات الشهرية ممنوعة في القروب. يرجى طلب مشاوير يومية فقط.")
         return
 
-    # 2. الكشف عن طلبات المشاوير
-    KEYWORDS = ["توصيل", "مشوار", "مطلوب", "ابي", "بغيت"]
+    # 2. فحص الكلمات المفتاحية للطلب
+    KEYWORDS = ["توصيل", "مشوار", "مطلوب", "ابي", "بغيت", "سواق", "كابتن", "وين"]
     if not any(k in msg_clean for k in KEYWORDS):
         return
 
-    # 3. البحث في الأحياء
-    await sync_all_users()
-    matched = []
-    found_dist = ""
-    
-    # اسم البوت لعمل الرابط
-    bot_username = context.bot.username
+    # 3. محاولة استخراج الحي من نص الرسالة
+    districts_list = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    found_dist = None
+    for dist in districts_list:
+        clean_dist = dist.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+        if clean_dist in msg_clean:
+            found_dist = dist
+            break
 
+    # 4. إذا لم يجد اسم الحي -> يعرض أزرار الأحياء للاختيار (مثل آلية الخاص)
+    if not found_dist:
+        keyboard = []
+        for i in range(0, len(districts_list), 2):
+            row = [InlineKeyboardButton(districts_list[i], callback_data=f"search_dist_{districts_list[i]}")]
+            if i + 1 < len(districts_list):
+                row.append(InlineKeyboardButton(districts_list[i+1], callback_data=f"search_dist_{districts_list[i+1]}"))
+            keyboard.append(row)
+        
+        await update.message.reply_text(
+            f"يا هلا بك يا {user.first_name} ✨\nحدد الحي المطلوب للبحث عن كباتن متوفرين:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # 5. إذا وجد الحي -> يبحث عن الكباتن المسجلين في هذا الحي
+    await sync_all_users()
+    matched_drivers = []
     for d in CACHED_DRIVERS:
         if d.get('districts'):
-            # تنظيف وفحص
+            # تنظيف قائمة أحياء الكابتن للمطابقة
             d_dists = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
-            for dist in d_dists:
-                if len(dist) > 2 and dist in msg_clean:
-                    matched.append(d)
-                    found_dist = dist
-                    break
-    
-    # 4. الرد في القروب
-    if matched:
+            if found_dist.replace("ة", "ه") in d_dists:
+                matched_drivers.append(d)
+
+    # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
+    if matched_drivers:
         keyboard = []
-        for d in matched[:5]:
-            # رابط ديب لينك ينقل للبوت مع كود الطلب
-            # req_DRIVERID_DISTRICT
-            deep_link = f"https://t.me/{bot_username}?start=req_{d['user_id']}_{found_dist}"
-            keyboard.append([InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=deep_link)])
-            
-            # تنبيه الكابتن (اختياري)
-            try:
-                await context.bot.send_message(d['user_id'], f"🔔 تنبيه: طلب في القروب لحي {found_dist}")
-            except: pass
+        for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
+            # رابط Deep Link يفتح البوت @Fogtyjnbot ويبدأ الطلب فوراً
+            # التنسيق: req_DRIVERID_DISTRICT
+            deep_link = f"https://t.me/Fogtyjnbot?start=req_{d['user_id']}_{found_dist}"
+            keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
 
         await update.message.reply_text(
-            f"✅ **وجدنا كباتن في {found_dist}:**\nاضغط لطلب الكابتن عبر البوت لضمان حقك:",
+            f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n"
+            "اضغط على الكابتن لإرسال تفاصيل مشوارك في الخاص:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
-
-    # --- داخل دالة group_order_scanner ---
-    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-
-    keyboard = []
-    for i in range(0, len(districts), 2):
-        row = [InlineKeyboardButton(districts[i], callback_data=f"search_dist_{districts[i]}")]
-        if i + 1 < len(districts):
-            row.append(InlineKeyboardButton(districts[i+1], callback_data=f"search_dist_{districts[i+1]}"))
-        keyboard.append(row)
-
-    # نرسل الرسالة ونخزنها لكي يعرف البوت أي رسالة يحذف لاحقاً
-    await update.message.reply_text(
-        f"يا هلا بك يا {user.first_name} ✨\nحدد الحي المطلوب للبحث عن كباتن متوفرين:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-    # 2️⃣ فحص كلمات البحث العادية (مشوار، توصيل...)
-    KEYWORDS = ["توصيل", "مشوار", "مطلوب", "سواق", "كابتن"]
-    if not any(k in msg_clean for k in KEYWORDS):
-        return
-
-    # 3️⃣ البحث عن الأحياء ومطابقتها مع الكباتن
-    await sync_all_users() 
-
-    matched_drivers = []
-    found_district = ""
-
-    for d in CACHED_DRIVERS:
-        if not d.get('districts'): continue
-
-        # تنظيف قائمة أحياء الكابتن للمقارنة
-        districts_list = d['districts'].replace("،", ",").split(",")
-        for dist in districts_list:
-            clean_dist = dist.strip().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
-
-            if len(clean_dist) > 2 and clean_dist in msg_clean:
-                if d not in matched_drivers:
-                    matched_drivers.append(d)
-                found_district = dist.strip()
-
-    # 4️⃣ إرسال التنبيهات والرد في المجموعة
-    if matched_drivers:
-        # أ: تنبيه الكباتن في الخاص
+        
+        # 7. تنبيه الكباتن في الخاص فوراً لزيادة سرعة الاستجابة
         for d in matched_drivers:
             try:
                 await context.bot.send_message(
                     chat_id=d['user_id'],
-                    text=f"🔔 **تنبيه:** يوجد طلب في حي ({found_district}) الآن بالقروب."
+                    text=f"🔔 **تنبيه:** يوجد طلب مشوار الآن في حي **{found_dist}** داخل القروب.. كن مستعداً!"
                 )
             except: pass
-
-        # ب: الرد في المجموعة (أزرار التواصل)
-        keyboard = []
-        for d in matched_drivers[:5]:
-            keyboard.append([
-                InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=f"tg://user?id={d['user_id']}")
-            ])
-
+    else:
+        # إذا لم يتوفر كباتن في هذا الحي حالياً
         await update.message.reply_text(
-            f"✅ **تم العثور على كباتن في حي {found_district}:**",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
+            f"📍 حي {found_dist}: لا يوجد كباتن مسجلين بهذا الحي حالياً.\n"
+            "يمكنك اختيار حي قريب أو الانتظار قليلاً."
         )
 
 async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
