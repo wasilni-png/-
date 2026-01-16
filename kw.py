@@ -1451,7 +1451,7 @@ def main():
     # ---------------------------------------------------------
     # الفئة الخامسة: المعالجات العامة (مواقع، قروبات، أزرار إنلاين)
     # ---------------------------------------------------------
-application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
+    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
     application.add_handler(CallbackQueryHandler(handle_callbacks))
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
     
