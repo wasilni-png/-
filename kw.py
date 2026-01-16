@@ -1299,7 +1299,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
             # رابط Deep Link يفتح البوت @Fogtyjnbot ويبدأ الطلب فوراً
             # التنسيق: req_DRIVERID_DISTRICT
-            deep_link = f"https://t.me/Fogtyjnbot?start=req_{d['user_id']}_{found_dist}"
+            deep_link = f"https://t.me/Fogtyjnbot?start=req_{d['user_id']}"
             keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
 
         await update.message.reply_text(
@@ -1314,15 +1314,24 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 await context.bot.send_message(
                     chat_id=d['user_id'],
-                    text=f"🔔 **تنبيه:** يوجد طلب مشوار الآن في حي **{found_dist}** داخل القروب.. كن مستعداً!"
+                    text=f"🔔 **تنبيه:** يوجد  **{found_dist}**  هناك طلبات قريبه منك. كن مستعداً!"
                 )
             except: pass
-    else:
-        # إذا لم يتوفر كباتن في هذا الحي حالياً
+        else:
+        # إذا لم يتوفر كباتن في الحي المحدد
+        bot_username = context.bot.username
+        # رابط ينقل العميل للبوت ويحفز خيار البحث بالموقع
+        search_link = f"https://t.me/{bot_username}?start=order_general"
+        
+        keyboard = [[InlineKeyboardButton("🌍 ابحث عن أقرب كابتن (GPS)", url=search_link)]]
+        
         await update.message.reply_text(
-            f"📍 حي {found_dist}: لا يوجد كباتن مسجلين بهذا الحي حالياً.\n"
-            "يمكنك اختيار حي قريب أو الانتظار قليلاً."
+            f"📍 حي {found_dist}: لا يوجد كباتن مسجلين بهذا الحي حالياً.\n\n"
+            "💡 **بدلاً من ذلك:** يمكنك البحث عن أقرب كابتن متاح حولك الآن بواسطة موقعك الجغرافي عبر البوت.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
         )
+
 
 async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال رسالة من الأدمن لمستخدم: /send ID الرسالة"""
