@@ -598,7 +598,8 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- 2. إصلاح خطوات التسجيل ---
-   if state == 'WAIT_NAME':
+       # تأكد أن هذا الكود داخل دالة المعالج الأساسية ومحاذاته صحيحة
+    if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
         await update.message.reply_text("📱 **الخطوة 2/2:**\nأرسل رقم جوالك للتواصل:")
         context.user_data['state'] = 'WAIT_PHONE'
@@ -606,10 +607,11 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == 'WAIT_PHONE':
         context.user_data['reg_phone'] = text
-        # تم حذف شرط فحص الدور (سائق/راكب) ليتوجه الجميع لإكمال التسجيل فوراً
+        # تم حذف خطوة السيارة وتوجيه الجميع لإكمال التسجيل مباشرة
         await complete_registration(update, context, context.user_data['reg_name'])
         context.user_data['state'] = None
         return
+
 
     # --- 3. طلب مشوار خاص (كابتن محدد) ---
     if state == 'WAIT_TRIP_DETAILS':
