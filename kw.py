@@ -1583,7 +1583,7 @@ def main():
     application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=-1)
 
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome))
 
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنجاح...")
