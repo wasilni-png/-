@@ -651,7 +651,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- 2. مرحلة إدخال الرقم (التحقق ثم الحفظ) ---
     if state == 'WAIT_PHONE':
-        import re
+       
         phone_input = text.strip()
         
         # التحقق من صحة الرقم السعودي
@@ -659,7 +659,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ **الرقم غير صحيح يا غالي..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
 
-        context.user_data['reg_phone'] = phone_input
+    context.user_data['reg_phone'] = phone_input
         # الانتقال فوراً لدالة الحفظ
         await complete_registration(update, context, context.user_data['reg_name'])
         context.user_data['state'] = None
