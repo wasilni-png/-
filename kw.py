@@ -412,7 +412,7 @@ async def complete_registration(update, context, name):
     chat_id = update.effective_chat.id
     role = context.user_data.get('reg_role')
     phone = context.user_data.get('reg_phone', '000000')
-    car = context.user_data.get('reg_car', None)
+    # لم نعد بحاجة لجلب reg_car من user_data
 
     conn = get_db_connection()
     if not conn: return
@@ -422,16 +422,15 @@ async def complete_registration(update, context, name):
             is_verified = True if role == 'rider' else False
 
             cur.execute("""
-                INSERT INTO users (user_id, chat_id, role, name, phone, car_info, is_verified)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     phone = EXCLUDED.phone,
-                    car_info = EXCLUDED.car_info,
                     role = EXCLUDED.role,
                     is_verified = EXCLUDED.is_verified
                 RETURNING *;
-            """, (user_id, chat_id, role, name, phone, car, is_verified))
+            """, (user_id, chat_id, role, name, phone, is_verified))
             conn.commit()
 
             # تحديث الذاكرة
@@ -441,27 +440,31 @@ async def complete_registration(update, context, name):
 
         if role == 'driver':
             await update.message.reply_text(
-                f"✅ شكراً لك يا كابتن {name}.\nطلبك قيد المراجعة، سيتم إشعارك عند التفعيل.",
+                f"✅ شكراً لك يا كابتن {name}.\nطلبك قيد المراجعة، سيتم إشعارك عند التفعيل من قبل الإدارة.",
                 reply_markup=get_main_kb('driver', False)
             )
-            # تنبيه الأدمن
+            # تنبيه الأدمن (بدون معلومات السيارة)
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
             ])
             for aid in ADMIN_IDS:
                 try:
-                    await context.bot.send_message(chat_id=aid, text=f"🔔 **تسجيل كابتن جديد**\nالاسم: {name}\nالسيارة: {car}", reply_markup=kb)
+                    await context.bot.send_message(
+                        chat_id=aid, 
+                        text=f"🔔 **تسجيل كابتن جديد**\nالاسم: {name}\nالجوال: {phone}\nالدور: كابتن", 
+                        reply_markup=kb
+                    )
                 except: pass
         else:
             await update.message.reply_text(
-                f"🎉 أهلاً بك {name}، تم تفعيل حسابك كراكب.",
+                f"🎉 أهلاً بك {name}، تم تفعيل حسابك كراكب بنجاح.",
                 reply_markup=get_main_kb('rider', True)
             )
 
     except Exception as e:
         print(f"Error registration: {e}")
-        await update.message.reply_text("حدث خطأ، حاول لاحقاً.")
+        await update.message.reply_text("حدث خطأ في عملية التسجيل، يرجى المحاولة لاحقاً.")
     finally:
         conn.close()
 
@@ -595,29 +598,15 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- 2. إصلاح خطوات التسجيل ---
-    if state == 'WAIT_NAME':
+       if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
-        await update.message.reply_text("📱 **الخطوة 2/3:**\nأرسل رقم جوالك للتواصل:")
+        await update.message.reply_text("📱 **الخطوة 2/2:**\nأرسل رقم جوالك للتواصل:")
         context.user_data['state'] = 'WAIT_PHONE'
         return
 
     if state == 'WAIT_PHONE':
         context.user_data['reg_phone'] = text
-        role = context.user_data.get('reg_role')
-        
-        if role == 'driver':
-            # إذا كان سائق، نطلب السيارة
-            await update.message.reply_text("🚗 **الخطوة الأخيرة:**\nما هو نوع وموديل سيارتك؟ (مثال: كامري 2023)")
-            context.user_data['state'] = 'WAIT_CAR'
-        else:
-            # إذا كان راكب، ننهي التسجيل فوراً
-            await complete_registration(update, context, context.user_data['reg_name'])
-            context.user_data['state'] = None
-        return
-
-    if state == 'WAIT_CAR':
-        context.user_data['reg_car'] = text
-        # إكمال تسجيل السائق
+        # تم حذف شرط فحص الدور (سائق/راكب) ليتوجه الجميع لإكمال التسجيل فوراً
         await complete_registration(update, context, context.user_data['reg_name'])
         context.user_data['state'] = None
         return
