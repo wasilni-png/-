@@ -642,7 +642,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone_input = text.strip()
         
         # التحقق: يبدأ بـ 05 ويتكون من 10 أرقام
-        if state == 'WAIT_NAME':
+    if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
         # تحديث الحالة إلى انتظار الرقم
         context.user_data['state'] = 'WAIT_PHONE'
@@ -655,7 +655,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone_input = text.strip()
         
         # التحقق من صحة الرقم السعودي
-        if not re.fullmatch(r'05\d{8}', phone_input):
+    if not re.fullmatch(r'05\d{8}', phone_input):
             await update.message.reply_text("⚠️ **الرقم غير صحيح يا غالي..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
 
