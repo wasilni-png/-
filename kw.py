@@ -52,7 +52,7 @@ def run_flask():
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 BOT_TOKEN = "8531219319:AAFZREyQum0t85NtVlaxw3PPrkW_4D_8iaU"
 # آيدي المشرفين
-ADMIN_IDS = [8563113166, 7996171713]
+ADMIN_IDS = [8563113166, 7996171713, 7580027135]
 
 # الكلمات المفتاحية للبحث في المجموعات
 KEYWORDS = ["مشوار", "توصيل", "سائق", "كابتن", "سيارة", "وينك", "متاح", "مطلوب", "ابي", "بغيت"]
