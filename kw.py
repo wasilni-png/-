@@ -649,21 +649,23 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
         return  # ضروري جداً لإنهاء الدالة هنا
 
-    # --- 2. مرحلة إدخال الرقم (التحقق ثم الحفظ) ---
+    # --- 2. مرحلة إدخال الرقم (التحقق ثم الحفظ) 
+
     if state == 'WAIT_PHONE':
-       
         phone_input = text.strip()
         
-        # التحقق من صحة الرقم السعودي
-    if not re.fullmatch(r'05\d{8}', phone_input):
+        # 1. التحقق من صحة الرقم (يجب أن يكون مزاحاً للداخل بـ 8 مسافات)
+        
+        if not re.fullmatch(r'05\d{8}', phone_input):
             await update.message.reply_text("⚠️ **الرقم غير صحيح يا غالي..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
 
-    context.user_data['reg_phone'] = phone_input
-        # الانتقال فوراً لدالة الحفظ
+        # 2. حفظ الرقم وإكمال التسجيل
+        context.user_data['reg_phone'] = phone_input
         await complete_registration(update, context, context.user_data['reg_name'])
         context.user_data['state'] = None
         return
+
 
 
 
