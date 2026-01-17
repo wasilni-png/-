@@ -598,7 +598,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- 2. إصلاح خطوات التسجيل ---
-       if state == 'WAIT_NAME':
+   if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
         await update.message.reply_text("📱 **الخطوة 2/2:**\nأرسل رقم جوالك للتواصل:")
         context.user_data['state'] = 'WAIT_PHONE'
