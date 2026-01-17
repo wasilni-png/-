@@ -295,30 +295,49 @@ def get_main_kb(role, is_verified=True):
     ], resize_keyboard=True)
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
-async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # التحقق من وجود أعضاء جدد في الرسالة
-    for new_member in update.message.new_chat_members:
-        # إذا كان العضو الجديد هو البوت نفسه، لا يرسل ترحيب (اختياري)
-        if new_member.id == context.bot.id:
-            continue
+async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    
+    # رابط فيديو قصير (يمكنك استبداله برابط مباشر لملف MP4 أو معرف ملف على تليجرام)
+    video_url = "https://example.com/your_promo_video.mp4" 
+    
+    welcome_text = (
+        "🚀 **أهلاً بك في بوت مشواري للتوصيل الذكي!**\n\n"
+        "يسعدنا انضمامك إلينا. المنصة الأسهل لربط الكباتن بالركاب في المدينة المنورة.\n\n"
+        "📺 شاهد الفيديو القصير أعلاه لمعرفة كيفية الطلب.\n"
+        "─────────────────\n"
+        "👇 للبدء أو للاستفسار، استخدم الأزرار أدناه:"
+    )
 
-        first_name = new_member.first_name
-        welcome_text = (
-            f"يا هلا وغلا بك يا {first_name} في قروبنا! ✨\n\n"
-            "نورتنا في منصة التوصيل الذكية 🚖\n"
-            "إذا كنت **كابتن** وتبغى تسجل معنا، ارسل كلمة (تسجيل) في الخاص.\n"
-            "إذا كنت **عميل** وتبغى مشوار، بس اكتب (مطلوب مشوار في حي ...) والشباب ما يقصرون معك."
+    # إنشاء الأزرار (البوت والإدارة)
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🤖 ابدأ استخدام البوت", url="https://t.me/Fogtyjnbot"),
+            InlineKeyboardButton("👨‍💻 تواصل مع الإدارة", url="https://t.me/YourAdminUserne")
+        ]
+    ])
+
+    # إرسال الفيديو مع النص والأزرار
+    try:
+        await context.bot.send_video(
+            chat_id=chat_id,
+            video=video_url,
+            caption=welcome_text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        # في حال فشل إرسال الفيديو، أرسل النص فقط
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=welcome_text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
         )
 
-        # إضافة أزرار تحت رسالة الترحيب (اختياري)
-        keyboard = [
-            [InlineKeyboardButton("شرح طريقة الاستخدام 📖", url="https://t.me/mishwarii?start=help")],
-            [InlineKeyboardButton("قناة التنبيهات 📢", url="https://t.me/mishwarii")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+# لا تنسى إضافة Handler لهذا الأمر في دالة main
+# application.add_handler(CommandHandler("welcome", send_fancy_welcome))
 
-        # إرسال الرسالة
-        await update.message.reply_text(text=welcome_text, reply_markup=reply_markup)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
