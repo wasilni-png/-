@@ -830,43 +830,66 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     location = update.message.location
     state = context.user_data.get('state')
 
-    # 1. تحديث الإحداثيات في الذاكرة الحية
+    # --- الخطوة 1: فحص المحادثة النشطة (الأولوية القصوى) ---
+    # إذا كان المستخدم في محادثة، نرسل الموقع للطرف الآخر فقط وننهي الدالة
+    partner_id = get_chat_partner(user_id)
+    if partner_id:
+        try:
+            # توجيه الموقع للطرف الآخر
+            await context.bot.copy_message(
+                chat_id=partner_id,
+                from_chat_id=user_id,
+                message_id=update.message.message_id
+            )
+            # اختياري: حفظ في السجلات
+            msg_content = f"📍 موقع: {location.latitude}, {location.longitude}"
+            conn = get_db_connection()
+            if conn:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type) VALUES (%s, %s, %s, %s)",
+                                (int(user_id), int(partner_id), msg_content, "location"))
+                    conn.commit()
+                conn.close()
+            return # إنهاء الدالة هنا يمنع تكرار طلب الرحلة
+        except Exception as e:
+            print(f"❌ فشل تمرير الموقع للمشترك: {e}")
+
+    # --- الخطوة 2: تحديث الإحداثيات العامة ---
     context.user_data['lat'] = location.latitude
     context.user_data['lon'] = location.longitude
-
-    # 2. تحديث قاعدة البيانات في الخلفية
     threading.Thread(target=update_db_location, args=(user_id, location.latitude, location.longitude)).start()
 
-    # 3. جلب بيانات المستخدم لمعرفة رتبته (سائق أم راكب)
-    await sync_all_users() # لضمان أن البيانات محدثة
+    # --- الخطوة 3: جلب بيانات المستخدم ---
+    await sync_all_users() 
     user_data = USER_CACHE.get(user_id, {})
-    user_role = user_data.get('role', 'rider') # القيمة الافتراضية راكب إذا لم يوجد
+    user_role = user_data.get('role', 'rider')
     is_verified = user_data.get('is_verified', False)
 
-    # 4. معالجة طلب الرحلة (للركاب فقط)
+    # --- الخطوة 4: معالجة طلب الرحلة (في حال عدم وجود محادثة) ---
     if state == 'WAIT_LOCATION_FOR_ORDER' and user_role == 'rider':
-        processing_msg = await update.message.reply_text("📡 جاري البحث عن كباتن...")
+        processing_msg = await update.message.reply_text("📡 جاري البحث عن كباتن بالقرب منك...")
         count = await broadcast_general_order(update, context)
         
         if count > 0:
             await processing_msg.edit_text(
-                f"✅ تم إرسال طلبك إلى **{count}** كابتن.",
+                f"✅ تم إرسال طلبك إلى **{count}** كابتن بنجاح.",
                 reply_markup=get_main_kb("rider", True)
             )
         else:
             await processing_msg.edit_text(
-                "⚠️ لا يوجد كباتن متاحين حالياً.",
+                "⚠️ نعتذر، لا يوجد كباتن متاحين في نطاقك حالياً.",
                 reply_markup=get_main_kb("rider", True)
             )
+        # تصفير الحالة ضروري لمنع التكرار
         context.user_data['state'] = None
 
-    # 5. إذا كان المرسل سائقاً يحدّث موقعه أو راكباً يحدّث موقعه خارج عملية الطلب
+    # --- الخطوة 5: تحديث الموقع العادي ---
     else:
-        # هنا السر: نرسل الكيبورد المناسب لرتبة المستخدم الفعلية
         await update.message.reply_text(
-            "📍 تم تحديث موقعك بنجاح في النظام.",
+            "📍 تم تحديث موقعك الجغرافي بنجاح.",
             reply_markup=get_main_kb(user_role, is_verified)
         )
+
 
 
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
