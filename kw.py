@@ -153,6 +153,26 @@ def init_db():
     finally:
         conn.close()
 
+
+def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
+    """دالة مساعدة لحفظ الرسائل في قاعدة البيانات"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO chat_logs (sender_id, receiver_id, message_content, msg_type)
+                VALUES (%s, %s, %s, %s)
+            """, (sender_id, receiver_id, content, msg_type))
+            conn.commit()
+    except Exception as e:
+        print(f"❌ خطأ في حفظ السجل: {e}")
+    finally:
+        conn.close()
+
+
+
+
 # ==================== 🛠️ 3. دوال مساعدة ====================
 
 class UserRole(str, Enum):
@@ -821,6 +841,44 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"👤 الكابتن: {d['name']}\n🚗 {d['car_info']}", reply_markup=kb)
         context.user_data['state'] = None
         return
+
+
+    
+    # 1. إعداد رسالة التنبيه للأدمن
+    admin_text = (
+        f"📩 **رسالة واردة (دعم فني)**\n"
+        f"👤 الاسم: {user.full_name}\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"🔗 المعرف: @{user.username if user.username else 'لا يوجد'}\n"
+        f"─────────────────\n"
+        f"💡 للرد عليه، قم بعمل (Reply) على هذه الرسالة."
+    )
+
+    # 2. أزرار التحكم السريع للأدمن
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚫 حظر", callback_data=f"admin_block_{user_id}"),
+            InlineKeyboardButton("💰 شحن", callback_data=f"admin_quickcash_{user_id}")
+        ]
+    ])
+
+    # 3. الإرسال لكل المشرفين
+    for aid in ADMIN_IDS:
+        try:
+            # إرسال بطاقة المعلومات
+            await context.bot.send_message(chat_id=aid, text=admin_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+            # تحويل رسالة المستخدم الأصلية
+            await context.bot.copy_message(chat_id=aid, from_chat_id=user_id, message_id=update.message.message_id)
+        except: pass
+
+    # 4. حفظ الرسالة الواردة في السجلات (من العضو للنظام/الأدمن)
+    # نستخدم الرقم 0 أو ID أول أدمن كـ receiver_id رمزي
+    save_chat_log(user_id, ADMIN_IDS[0], text or "[وسائط]", "support_msg")
+
+    # 5. رسالة تأكيد للمستخدم (اختياري - حتى يعرف أن صوته وصل)
+    # نرسلها فقط إذا لم يكن يكتب في مجموعة
+    if update.message.chat.type == "private":
+        await update.message.reply_text("📨 تم استلام رسالتك وتحويلها لفريق الدعم. سيتم الرد عليك قريباً.")
 
 
 # --- معالجة المواقع (Location) ---
@@ -1675,62 +1733,38 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
+    msg_text = update.message.text or "[ملف/صورة]"
 
-    # --- أولاً: إذا كان المرسل مستخدم عادي (تحويل الرسالة للأدمن) ---
-    if chat_id not in ADMIN_IDS:
-        admin_id = ADMIN_IDS[0] 
-        
-        # إنشاء أزرار تحكم سريعة تظهر للأدمن فقط
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🚫 حظر المستخدم", callback_data=f"admin_block_{user.id}"),
-                InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{user.id}")
-            ]
-        ])
-        
-        user_info = (
-            f"📩 **رسالة جديدة**\n"
-            f"👤 من: {user.full_name}\n"
-            f"🆔 ID: `{user.id}`\n"
-            f"─────────────────\n"
-            f"💡 للرد على المستخدم، قم بعمل (Reply) على هذه الرسالة."
-        )
-        
-        # 1. إرسال بيانات المستخدم مع أزرار التحكم
-        await context.bot.send_message(
-            chat_id=admin_id, 
-            text=user_info, 
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-        
-        # 2. تحويل الرسالة الأصلية (نص، صوت، صورة...)
-        return await context.bot.copy_message(
-            chat_id=admin_id,
-            from_chat_id=chat_id,
-            message_id=update.message.message_id
-        )
-
-    # --- ثانياً: إذا كان المرسل هو الأدمن (الرد على المستخدم) ---
+    # --- (أ) إذا كان المرسل هو الأدمن (يريد الرد على عضو) ---
     if chat_id in ADMIN_IDS and update.message.reply_to_message:
-        # استخراج ID المستخدم من الرسالة المقتبسة باستخدام Regex
-        source_text = update.message.reply_to_message.text or update.message.reply_to_message.caption
-        if not source_text: return
+        original_msg = update.message.reply_to_message.text or update.message.reply_to_message.caption
+        if not original_msg: return
 
         try:
-            target_user_id = re.search(r"ID:\s*(\d+)", source_text).group(1)
+            # استخراج ID العضو من نص الرسالة الأصلية
+            target_user_id = int(re.search(r"ID:\s*`?(\d+)`?", original_msg).group(1))
             
-            # إرسال رد الأدمن للمستخدم
+            # 1. إرسال الرد للعضو
             await context.bot.copy_message(
                 chat_id=target_user_id,
                 from_chat_id=chat_id,
                 message_id=update.message.message_id
             )
-            await update.message.reply_text(f"✅ تم إرسال ردك للمستخدم ({target_user_id}).")
+            
+            # 2. حفظ الرد في السجلات (من الأدمن للعضو)
+            save_chat_log(chat_id, target_user_id, msg_text, "admin_reply")
+
+            await update.message.reply_text(f"✅ تم إرسال الرد وحفظه في السجل.")
+            
+        except AttributeError:
+             await update.message.reply_text("⚠️ لم أتمكن من استخراج ID العضو. تأكد أنك ترد على رسالة البوت التي تحتوي على البيانات.")
         except Exception as e:
-            await update.message.reply_text("⚠️ فشل الرد. تأكد من عمل Reply على رسالة (بيانات المستخدم) التي تحتوي على الـ ID.")
+            await update.message.reply_text(f"❌ حدث خطأ: {e}")
+        return
 
-
+    # --- (ب) إذا وصلت رسالة هنا ولم تكن رداً (نعتبرها رسالة مجهولة من الأدمن نفسه) ---
+    # يمكن تجاهلها أو معالجتها كأي رسالة أخرى
+    pass
 
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
@@ -1750,8 +1784,17 @@ def main():
 
     # 2. بناء التطبيق
     application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # --- الفئة الأولى: الأوامر ---
+    
+    # ---------------------------------------------------------
+    # 🛑 المنطقة 1: المعالجات ذات الأولوية القصوى (Group 1)
+    # (تعمل بشكل منفصل ولا تتأثر بالنصوص)
+    # ---------------------------------------------------------
+    
+    # 1. الكولباك (أزرار الإنلاين) - يجب أن تكون أول شيء لتستجيب بسرعة
+    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
+    application.add_handler(CallbackQueryHandler(handle_callbacks))
+    
+    # 2. الأوامر الصريحة (Commands)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("end", end_chat_command))
     application.add_handler(CommandHandler("send", admin_send_to_user))
@@ -1760,41 +1803,47 @@ def main():
     application.add_handler(CommandHandler("broadcast", admin_broadcast))
     application.add_handler(CommandHandler("logs", admin_get_logs))
 
-    # --- الفئة الثانية: الأزرار النصية الحساسة ---
-    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command))
-    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء الطلب$"), start_command))
-    application.add_handler(MessageHandler(filters.Regex("^❌ إلغاء المراسلة$"), start_command))
+    # 3. الأزرار النصية "الحساسة" (مثل أزرار الإلغاء)
+    application.add_handler(MessageHandler(filters.Regex("^❌"), start_command))
 
-    # --- الفئة الثالثة: المحادثة المباشرة (Relay) - Group 0 ---
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌"),
-        chat_relay_handler
-    ), group=0)
+    # 4. معالج المواقع (Location)
+    application.add_handler(MessageHandler(filters.LOCATION, location_handler))
 
-# ضع هذا السطر قبل الـ global_handler
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, admin_reply_handler))
-
-
-    # --- الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1 ---
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
-        global_handler
-    ), group=1)
-
-    # --- الفئة الخامسة: أزرار الإنلاين (Callback) والمواقع ---
-    # فصلنا التسجيل بنمط خاص لضمان عمله فوراً
-    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
-    application.add_handler(CallbackQueryHandler(handle_callbacks))
-    
-    application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=-1)
-
+    # 5. معالجة رسائل القروبات (منفصلة تماماً)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome))
 
+
+    # ---------------------------------------------------------
+    # 🚦 المنطقة 2: خط معالجة النصوص (Pipeline) - (Group 0)
+    # (الترتيب هنا حياة أو موت للبوت!)
+    # ---------------------------------------------------------
+
+    # [أولوية 1] المحادثة المباشرة (Relay)
+    # يجب أن تكون الأولى: إذا كان المستخدم في رحلة، نرسل الرسالة للطرف الآخر ونوقف الباقي.
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+        chat_relay_handler
+    ))
+
+    # [أولوية 2] ردود الأدمن (Admin Reply)
+    # نخصصها للأدمن فقط هنا باستخدام فلتر user_ids
+    # هذا يمنع الأدمن من تفعيل "القوائم العادية" بالخطأ أثناء الرد
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & filters.User(ADMIN_IDS) & filters.REPLY, 
+        admin_reply_handler
+    ))
+
+    # [أولوية 3] المعالج الشامل (Global Handler)
+    # يعالج تسجيل الدخول، القوائم، وطلب الرحلات
+    # (هنا يقع معظم المستخدمين العاديين)
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
+        global_handler
+    ))
+    
+    # ---------------------------------------------------------
+
     # 3. بدء التشغيل
-    print("🚀 البوت يعمل الآن بنجاح...")
+    print("🚀 البوت يعمل الآن بنجاح وبترتيب صحيح...")
     application.run_polling(drop_pending_updates=True)
-
-
-if __name__ == '__main__':
-    main()
