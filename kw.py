@@ -1215,6 +1215,25 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
+
+    # داخل handle_callbacks
+    if data.startswith("admin_block_"):
+        target_id = int(data.split("_")[2])
+        # هنا تضع منطق الحظر في قاعدة البيانات (تحديث is_blocked = True)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET is_blocked = TRUE WHERE user_id = %s", (target_id,))
+            conn.commit()
+        conn.close()
+        await query.answer("✅ تم حظر المستخدم بنجاح")
+        await query.edit_message_caption(caption=query.message.caption + "\n\n🚫 (تم حظر هذا العضو)")
+
+    elif data.startswith("admin_quickcash_"):
+        target_id = data.split("_")[2]
+        await query.message.reply_text(f"لشحن رصيد هذا العضو، استخدم الأمر التالي:\n`/cash {target_id} 50`")
+        await query.answer()
+
+
     # ===============================================================
     # 7. التوثيق (لوحة تحكم الأدمن)
     # ===============================================================
@@ -1653,6 +1672,64 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # منع الرسالة من الوصول للـ global_handler
     raise ApplicationHandlerStop
 
+async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    # --- أولاً: إذا كان المرسل مستخدم عادي (تحويل الرسالة للأدمن) ---
+    if chat_id not in ADMIN_IDS:
+        admin_id = ADMIN_IDS[0] 
+        
+        # إنشاء أزرار تحكم سريعة تظهر للأدمن فقط
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚫 حظر المستخدم", callback_data=f"admin_block_{user.id}"),
+                InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{user.id}")
+            ]
+        ])
+        
+        user_info = (
+            f"📩 **رسالة جديدة**\n"
+            f"👤 من: {user.full_name}\n"
+            f"🆔 ID: `{user.id}`\n"
+            f"─────────────────\n"
+            f"💡 للرد على المستخدم، قم بعمل (Reply) على هذه الرسالة."
+        )
+        
+        # 1. إرسال بيانات المستخدم مع أزرار التحكم
+        await context.bot.send_message(
+            chat_id=admin_id, 
+            text=user_info, 
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+        # 2. تحويل الرسالة الأصلية (نص، صوت، صورة...)
+        return await context.bot.copy_message(
+            chat_id=admin_id,
+            from_chat_id=chat_id,
+            message_id=update.message.message_id
+        )
+
+    # --- ثانياً: إذا كان المرسل هو الأدمن (الرد على المستخدم) ---
+    if chat_id in ADMIN_IDS and update.message.reply_to_message:
+        # استخراج ID المستخدم من الرسالة المقتبسة باستخدام Regex
+        source_text = update.message.reply_to_message.text or update.message.reply_to_message.caption
+        if not source_text: return
+
+        try:
+            target_user_id = re.search(r"ID:\s*(\d+)", source_text).group(1)
+            
+            # إرسال رد الأدمن للمستخدم
+            await context.bot.copy_message(
+                chat_id=target_user_id,
+                from_chat_id=chat_id,
+                message_id=update.message.message_id
+            )
+            await update.message.reply_text(f"✅ تم إرسال ردك للمستخدم ({target_user_id}).")
+        except Exception as e:
+            await update.message.reply_text("⚠️ فشل الرد. تأكد من عمل Reply على رسالة (بيانات المستخدم) التي تحتوي على الـ ID.")
+
 
 
 
@@ -1693,6 +1770,10 @@ def main():
         filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌"),
         chat_relay_handler
     ), group=0)
+
+# ضع هذا السطر قبل الـ global_handler
+application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, admin_reply_handler))
+
 
     # --- الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1 ---
     application.add_handler(MessageHandler(
