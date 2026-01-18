@@ -452,7 +452,8 @@ async def complete_registration(update, context, name):
     username = f"@{user.username}" if user.username else "لا يوجد معرف"
     
     role = context.user_data.get('reg_role')
-    phone = context.user_data.get('reg_phone', '000000')
+    # للراكب سيكون الرقم أصفار لأننا سجلناه مباشرة
+    phone = context.user_data.get('reg_phone', '0000000000')
 
     conn = get_db_connection()
     if not conn: return
@@ -476,9 +477,11 @@ async def complete_registration(update, context, name):
 
         context.user_data.clear()
 
+        # --- حالة الكابتن (يرسل إشعار للأدمن) ---
         if role == 'driver':
-            await update.message.reply_text(
-                f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\nحسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!",
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\nحسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!",
                 reply_markup=get_main_kb('driver', False)
             )
             
@@ -488,7 +491,6 @@ async def complete_registration(update, context, name):
                  InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
             ])
             
-            # نص الرسالة للأدمن (تشمل المعرف ورابط مباشر)
             admin_text = (
                 f"🔔 **تسجيل كابتن جديد للمراجعة**\n"
                 f"─────────────────\n"
@@ -508,15 +510,21 @@ async def complete_registration(update, context, name):
                         parse_mode=ParseMode.MARKDOWN
                     )
                 except: pass
+        
+        # --- حالة الراكب (بدون إشعار للأدمن) ---
         else:
-            await update.message.reply_text(
-                f"🎉 **يا هلا بيك يا {name}**\nتم تفعيل حسابك كراكب، وتقدر تطلب مشاويرك من الآن!",
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 **يا هلا بيك يا {name}**\nتم تفعيل حسابك كراكب بنجاح، تقدر تطلب مشاويرك من الحين!",
                 reply_markup=get_main_kb('rider', True)
             )
 
     except Exception as e:
         print(f"Error registration: {e}")
-        await update.message.reply_text("حدث خطأ، حاول مرة ثانية لاحقاً.")
+        # محاولة إرسال رسالة خطأ للمستخدم
+        try:
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
+        except: pass
     finally:
         conn.close()
 
