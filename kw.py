@@ -1669,6 +1669,11 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    partner_id = get_chat_partner(user_id)
+    
+    # إذا لم يكن هناك طرف آخر (ليست رحلة نشطة)، اترك الرسالة تمر للمعالج التالي
+    if not partner_id:
+        return 
     text = update.message.text
 
     # 🛑 منع توجيه الأوامر أو زر الإنهاء للطرف الآخر
@@ -1782,70 +1787,57 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
 
-    # 2. بناء التطبيق
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
     # ---------------------------------------------------------
-    # 🛑 المنطقة 1: المعالجات ذات الأولوية القصوى (Group 1)
-    # (تعمل بشكل منفصل ولا تتأثر بالنصوص)
+    # المجموعة 0: الأوامر والعمليات الفورية (أولوية مطلقة)
     # ---------------------------------------------------------
+    application.add_handler(CommandHandler("start", start_command), group=0)
+    application.add_handler(CommandHandler("end", end_chat_command), group=0)
+    application.add_handler(CommandHandler("cash", admin_cash), group=0)
+    application.add_handler(CommandHandler("sub", admin_add_days), group=0)
+    application.add_handler(CommandHandler("broadcast", admin_broadcast), group=0)
+    application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
     
-    # 1. الكولباك (أزرار الإنلاين) - يجب أن تكون أول شيء لتستجيب بسرعة
-    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"))
-    application.add_handler(CallbackQueryHandler(handle_callbacks))
-    
-    # 2. الأوامر الصريحة (Commands)
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("end", end_chat_command))
-    application.add_handler(CommandHandler("send", admin_send_to_user))
-    application.add_handler(CommandHandler("cash", admin_cash))
-    application.add_handler(CommandHandler("sub", admin_add_days))
-    application.add_handler(CommandHandler("broadcast", admin_broadcast))
-    application.add_handler(CommandHandler("logs", admin_get_logs))
-
-    # 3. الأزرار النصية "الحساسة" (مثل أزرار الإلغاء)
-    application.add_handler(MessageHandler(filters.Regex("^❌"), start_command))
-
-    # 4. معالج المواقع (Location)
-    application.add_handler(MessageHandler(filters.LOCATION, location_handler))
-
-    # 5. معالجة رسائل القروبات (منفصلة تماماً)
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner))
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome))
-
+    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"), group=0)
+    application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
+    application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
 
     # ---------------------------------------------------------
-    # 🚦 المنطقة 2: خط معالجة النصوص (Pipeline) - (Group 0)
-    # (الترتيب هنا حياة أو موت للبوت!)
+    # المجموعة 1: ردود الأدمن والنظام (قبل الدردشة العامة)
     # ---------------------------------------------------------
-
-    # [أولوية 1] المحادثة المباشرة (Relay)
-    # يجب أن تكون الأولى: إذا كان المستخدم في رحلة، نرسل الرسالة للطرف الآخر ونوقف الباقي.
     application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-        chat_relay_handler
-    ))
-
-    # [أولوية 2] ردود الأدمن (Admin Reply)
-    # نخصصها للأدمن فقط هنا باستخدام فلتر user_ids
-    # هذا يمنع الأدمن من تفعيل "القوائم العادية" بالخطأ أثناء الرد
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & filters.User(ADMIN_IDS) & filters.REPLY, 
+        filters.ChatType.PRIVATE & filters.REPLY & filters.User(ADMIN_IDS), 
         admin_reply_handler
-    ))
+    ), group=1)
 
-    # [أولوية 3] المعالج الشامل (Global Handler)
-    # يعالج تسجيل الدخول، القوائم، وطلب الرحلات
-    # (هنا يقع معظم المستخدمين العاديين)
+    # ---------------------------------------------------------
+    # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
+    # ---------------------------------------------------------
+    # ملاحظة: تم رفع الـ global_handler قبل الـ relay لضمان عمل التسجيل
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         global_handler
-    ))
-    
+    ), group=2)
+
     # ---------------------------------------------------------
+    # المجموعة 3: نظام التوجيه (Chat Relay)
+    # ---------------------------------------------------------
+    # لا تعمل هذه إلا إذا لم تكن الرسالة (أمر) أو (بيانات تسجيل)
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & (filters.TEXT | filters.LOCATION) & ~filters.COMMAND,
+        chat_relay_handler
+    ), group=3)
+
+    # ---------------------------------------------------------
+    # المجموعة 4: المواقع والمجموعات العامة
+    # ---------------------------------------------------------
+    application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=4)
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner), group=4)
 
     # 3. بدء التشغيل
-    print("🚀 البوت يعمل الآن بنجاح وبترتيب صحيح...")
+    print("🚀 البوت يعمل الآن بنظام المجموعات (0 -> 4) بنجاح...")
     application.run_polling(drop_pending_updates=True)
-    if __name__ == '__main__':
+
+if __name__ == '__main__':
     main()
