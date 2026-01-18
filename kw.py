@@ -303,7 +303,7 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     
     # رابط فيديو قصير (يمكنك استبداله برابط مباشر لملف MP4 أو معرف ملف على تليجرام)
-    video_url = "https://example.com/your_promo_video.mp4" 
+    video_url = "4h7D6EynVTmUxT9WfPryrIac24KoxyK7DdeVyTeWEAPhTQ7ALpVK2r7C07ggS1ok" 
     
     welcome_text = (
         "🚀 **أهلاً بك في بوت مشواري للتوصيل الذكي!**\n\n"
@@ -317,7 +317,7 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🤖 ابدأ استخدام البوت", url="https://t.me/Fogtyjnbot"),
-            InlineKeyboardButton("👨‍💻 تواصل مع الإدارة", url="https://t.me/YourAdminUserne")
+            InlineKeyboardButton(" قناة التعليمات 🚘 ", url="https://t.me/mishwarii")
         ]
     ])
 
