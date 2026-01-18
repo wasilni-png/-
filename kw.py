@@ -1847,5 +1847,5 @@ def main():
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنجاح وبترتيب صحيح...")
     application.run_polling(drop_pending_updates=True)
-if __name__ == '__main__':
+    if __name__ == '__main__':
     main()
