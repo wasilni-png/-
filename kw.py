@@ -1772,7 +1772,7 @@ def main():
     ), group=0)
 
 # ضع هذا السطر قبل الـ global_handler
-application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, admin_reply_handler))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, admin_reply_handler))
 
 
     # --- الفئة الرابعة: المعالج الشامل (Global Handler) - Group 1 ---
