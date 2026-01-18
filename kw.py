@@ -51,9 +51,9 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8531219319:AAFZREyQum0t85NtVlaxw3PPrkW_4D_8iaU"
+BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
 # آيدي المشرفين
-ADMIN_IDS = [8563113166, 7996171713]
+ADMIN_IDS = [8563113166, 7996171713, 7580027135]
 
 # الكلمات المفتاحية للبحث في المجموعات
 KEYWORDS = ["مشوار", "توصيل", "سائق", "كابتن", "سيارة", "وينك", "متاح", "مطلوب", "ابي", "بغيت"]
@@ -303,7 +303,7 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     
     # رابط فيديو قصير (يمكنك استبداله برابط مباشر لملف MP4 أو معرف ملف على تليجرام)
-    video_url = "4h7D6EynVTmUxT9WfPryrIac24KoxyK7DdeVyTeWEAPhTQ7ALpVK2r7C07ggS1ok" 
+    video_url = "tg://openmessage?user_id=8531219319&message_id=4436" 
     
     welcome_text = (
         "🚀 **أهلاً بك في بوت مشواري للتوصيل الذكي!**\n\n"
