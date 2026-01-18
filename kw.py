@@ -1372,10 +1372,21 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
         conn.close()
 
-        await update.message.reply_text(f"✅ تم إضافة {amount} ريال.")
-        await context.bot.send_message(uid, f"💰 تم شحن رصيدك بـ {amount} ريال.")
-    except:
-        await update.message.reply_text("❌ خطأ: /cash [ID] [Amount]")
+        # 🔥 الخطوة الذهبية: تحديث الكاش إجبارياً فوراً
+        await sync_all_users(force=True)
+
+        await update.message.reply_text(f"✅ تم إضافة {amount} ريال للعضو {uid}.")
+        
+        # جلب الرصيد الجديد من الكاش لإرساله في الرسالة
+        new_balance = USER_CACHE.get(uid, {}).get('balance', 0)
+        
+        await context.bot.send_message(
+            chat_id=uid, 
+            text=f"💰 **تم شحن رصيدك بنجاح!**\n\nالمبلغ المضاف: {amount} ريال\nرصيدك الحالي الآن: {new_balance} ريال"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ: تأكد من الصيغة /cash [ID] [Amount]\n{e}")
+
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تجاهل الرسائل التي لا تحتوي على نص أو ليست في مجموعة
