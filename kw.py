@@ -53,7 +53,7 @@ def run_flask():
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 BOT_TOKEN = "8531219319:AAFZREyQum0t85NtVlaxw3PPrkW_4D_8iaU"
 # آيدي المشرفين
-ADMIN_IDS = [8563113166, 7996171713, 7580027135]
+ADMIN_IDS = [8563113166, 7996171713]
 
 # الكلمات المفتاحية للبحث في المجموعات
 KEYWORDS = ["مشوار", "توصيل", "سائق", "كابتن", "سيارة", "وينك", "متاح", "مطلوب", "ابي", "بغيت"]
@@ -414,18 +414,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- التسجيل ---
+# --- التسجيل المحدث ---
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user = update.effective_user
     await query.answer()
 
     role = "rider" if query.data == "reg_rider" else "driver"
     context.user_data['reg_role'] = role
-    context.user_data['state'] = 'WAIT_NAME'
 
-    role_text = "كابتن (سائق)" if role == "driver" else "راكب (عميل)"
-    msg = f"✅ اخترت: **{role_text}**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن:"
+    if role == "rider":
+        # تسجيل الراكب مباشرة باستخدام بياناته من تليجرام
+        first_name = user.first_name if user.first_name else "راكب"
+        last_name = user.last_name if user.last_name else ""
+        full_name = f"{first_name} {last_name}".strip()
+        
+        # تعيين رقم افتراضي أو تركه فارغاً للركاب
+        context.user_data['reg_phone'] = "0000000000" 
+        
+        # رسالة تنبيه سريعة قبل إتمام التسجيل
+        await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
+        
+        # استدعاء دالة إكمال التسجيل فوراً
+        await complete_registration(update, context, full_name)
+    else:
+        # إذا كان كابتن، نستمر في الإجراءات المعتادة (طلب الاسم والرقم)
+        context.user_data['state'] = 'WAIT_NAME'
+        msg = f"✅ اخترت: **كابتن (سائق)**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن للتوثيق:"
+        await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
 
-    await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
 
 async def complete_registration(update, context, name):
     user = update.effective_user
