@@ -991,39 +991,71 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- منطق تبديل الأحياء ---
+        # --- 1. معالجة الضغط على اسم الحي (تبديل الحالة) ---
     if data.startswith("toggle_dist_"):
         dist_name = data.replace("toggle_dist_", "")
         user_id = update.effective_user.id
         
-        # البحث عن الكابتن في الكاش لتعديله
-        for d in CACHED_DRIVERS:
-            if d['user_id'] == user_id:
-                # تحويل النص الحالي لقائمة
-                current_list = [x.strip() for x in d.get('districts', "").replace("،", ",").split(",") if x.strip()]
-                
-                if dist_name in current_list:
-                    current_list.remove(dist_name) # حذف
-                else:
-                    current_list.append(dist_name) # إضافة
-                
-                # تحديث النص (String)
-                new_districts_str = "، ".join(current_list)
-                d['districts'] = new_districts_str
-                
-                # تحديث سوبابيز فوراً
-                update_districts_in_db(user_id, new_districts_str)
-                break
+        conn = get_db_connection()
+        if not conn: return
         
-        # إعادة عرض الأزرار لتظهر العلامات المحدثة
-        await districts_settings_view(update, context)
+        try:
+            with conn.cursor() as cur:
+                # جلب الأحياء الحالية مباشرة من القاعدة
+                cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
+                res = cur.fetchone()
+                
+                # تحويل النص إلى قائمة
+                current_list = []
+                if res and res[0]:
+                    current_list = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
+                
+                # تبديل الحالة: إذا موجود احذفه، إذا مو موجود ضيفه
+                if dist_name in current_list:
+                    current_list.remove(dist_name)
+                else:
+                    current_list.append(dist_name)
+                
+                # تحويل القائمة لنص وتحديث القاعدة
+                new_districts_str = "، ".join(current_list)
+                cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
+                conn.commit()
+
+            # 🔄 تحديث الكاش المحلي فوراً لضمان عمل البوت في القروبات بناءً على الأحياء الجديدة
+            await sync_all_users()
+
+            # 2. إعادة بناء لوحة المفاتيح فوراً لعرض التغيير للمستخدم
+            all_districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+            keyboard = []
+            for i in range(0, len(all_districts), 2):
+                row = []
+                for j in range(2):
+                    if i + j < len(all_districts):
+                        name = all_districts[i + j]
+                        status = "✅ " if name in current_list else "⬜ "
+                        row.append(InlineKeyboardButton(f"{status}{name}", callback_data=f"toggle_dist_{name}"))
+                keyboard.append(row)
+            
+            keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="save_districts")])
+            
+            # تحديث الرسالة الحالية بالأزرار الجديدة
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+
+        except Exception as e:
+            print(f"❌ خطأ في تحديث الأحياء: {e}")
+            await query.answer("⚠️ حدث خطأ أثناء التحديث")
+        finally:
+            conn.close()
         return
 
+    # --- 2. معالجة زر الحفظ النهائي ---
     elif data == "save_districts":
-        await query.answer("✅ تم حفظ الأحياء في نظام سوبابيز")
-        await query.edit_message_text("🚀 تم تحديث أحيائك! ستصلك تنبيهات القروب بناءً على اختياراتك الآن.")
-        await sync_all_users() # مزامنة نهائية للكاش
+        await query.answer("✅ تم حفظ إعداداتك بنجاح")
+        await query.edit_message_text(
+            "🚀 **تم تحديث نطاق عملك!**\n\nستصلك تنبيهات فورية في الخاص عند طلب أي مشوار في الأحياء التي اخترتها.\nشكراً لك يا كابتن.",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
-
 
 
     # ===============================================================
