@@ -207,11 +207,14 @@ def update_districts_in_db(user_id, districts_str):
 
 
 
-async def sync_all_users():
+async def sync_all_users(force=False): # أضفنا force=False
     """تحديث الذاكرة المؤقتة من قاعدة البيانات"""
     global USER_CACHE, CACHED_DRIVERS, LAST_CACHE_SYNC
-    if (datetime.now() - LAST_CACHE_SYNC).total_seconds() < 120:
-        return
+    
+    # إذا لم يكن طلباً إجبارياً، نتحقق من مرور دقيقتين
+    if not force:
+        if (datetime.now() - LAST_CACHE_SYNC).total_seconds() < 120:
+            return
 
     conn = get_db_connection()
     if not conn: return
@@ -224,9 +227,10 @@ async def sync_all_users():
             CACHED_DRIVERS = [u for u in all_users if u['role'] == 'driver']
 
             LAST_CACHE_SYNC = datetime.now()
-            # print(f"⚡ تم تحديث الذاكرة: {len(CACHED_DRIVERS)} كابتن.")
     finally:
         conn.close()
+
+
 # --- دوال الدردشة الوسيطة ---
 
 def start_chat_session(user1_id, user2_id):
@@ -1214,7 +1218,13 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         
         # تحديث الكاش
-        await sync_all_users()
+        try:
+            markup = get_main_kb('driver', is_verified) # نرسل الكيبورد بناءً على الحالة الجديدة
+            await context.bot.send_message(chat_id=target_uid, text=msg, reply_markup=markup)
+        except: pass
+
+        # 🔥 تحديث الكاش فوراً وإجباري
+        await sync_all_users(force=True) 
         return
 
 
