@@ -1810,7 +1810,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
-application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome), group=0)
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome), group=0)
 
 
     # ---------------------------------------------------------
