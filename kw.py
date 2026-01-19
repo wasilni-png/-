@@ -372,7 +372,6 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
