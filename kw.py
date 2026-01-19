@@ -1660,22 +1660,23 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             if found_dist.replace("ة", "ه") in d_dists:
                 matched_drivers.append(d)
 
-    # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
+       # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
     if matched_drivers:
         keyboard = []
         for d in matched_drivers[:6]:
-        driver_id = d['user_id']
-    # الرابط يحتوي فقط على كلمة order_ متبوعة بـ ID الكابتن
-    deep_link = f"https://t.me/{context.bot.username}?start=order_{driver_id}"
-    
-    keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
+            driver_id = d['user_id']
+            driver_name = d['name']
+            
+            # الرابط المختصر الذي سينقل الراكب للبوت ويسجله تلقائياً
+            deep_link = f"https://t.me/{context.bot.username}?start=order_{driver_id}"
+            
+            # إضافة زر لكل كابتن في القائمة
+            keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {driver_name}", url=deep_link)])
 
-            
-            # تصحيح السطر أدناه: إضافة اسم الكابتن وإغلاق علامات التنصيص والقوس
-            
+        # إرسال الرسالة النهائية للقروب مع أزرار الكباتن
         await update.message.reply_text(
             f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n\n"
-            "اضغط على اسم الكابتن ثم اضغط (ابدأ/Start) واكتب تفاصيل مشوارك داخل البوت:",
+            "إليك قائمة الكباتن المتاحين الآن. اضغط على الكابتن المناسب لك لإرسال تفاصيل مشوارك له مباشرة:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
