@@ -441,8 +441,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-
-    elif data.startswith("book_"):
+        elif data.startswith("book_"):
         parts = data.split("_")
         driver_id = parts[1]
         dist_name = parts[2] if len(parts) > 2 else "غير محدد"
@@ -477,6 +476,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN
             )
         return
+
 
 
 
