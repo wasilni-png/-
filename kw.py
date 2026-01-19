@@ -442,6 +442,44 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
+    elif data.startswith("book_"):
+        parts = data.split("_")
+        driver_id = parts[1]
+        dist_name = parts[2] if len(parts) > 2 else "غير محدد"
+        
+        # 1. حفظ البيانات في ذاكرة المستخدم
+        context.user_data['driver_to_order'] = driver_id
+        context.user_data['order_dist'] = dist_name
+
+        # 2. التحقق: هل الضغط تم داخل البوت (خاص) أم في المجموعة؟
+        if update.effective_chat.type == "private":
+            # المستخدم داخل البوت -> اطلب التفاصيل فوراً
+            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
+            await query.edit_message_text(
+                f"📝 **طلب مشوار - حي {dist_name}**\n\n"
+                "يرجى كتابة **تفاصيل المشوار والسعر** المتوقع الآن:",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            # المستخدم ضغط على الزر داخل "القروب" -> تحويله للبوت برابط سريع
+            bot_username = context.bot.username
+            # الرابط السريع الذي سينفذ التسجيل التلقائي في دالة start
+            url = f"https://t.me/{bot_username}?start=order_{driver_id}"
+            
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار", url=url)
+            ]])
+            
+            await query.edit_message_text(
+                "📥 **خطوة واحدة متبقية!**\n\n"
+                "انتقل إلى البوت الآن لكتابة تفاصيل مشوارك وتحديد السعر مع الكابتن مباشرة بشكل خاص وآمن.",
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+
+
+
         # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
                 # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
         elif arg_value.startswith("order_"):
@@ -1150,42 +1188,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
     # 3. بدء عملية حجز كابتن محدد (Book)
     # ===============================================================
-        elif data.startswith("book_"):
-        parts = data.split("_")
-        driver_id = parts[1]
-        dist_name = parts[2] if len(parts) > 2 else "غير محدد"
         
-        # 1. حفظ البيانات في ذاكرة المستخدم
-        context.user_data['driver_to_order'] = driver_id
-        context.user_data['order_dist'] = dist_name
-
-        # 2. التحقق: هل الضغط تم داخل البوت (خاص) أم في المجموعة؟
-        if update.effective_chat.type == "private":
-            # المستخدم داخل البوت -> اطلب التفاصيل فوراً
-            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-            await query.edit_message_text(
-                f"📝 **طلب مشوار - حي {dist_name}**\n\n"
-                "يرجى كتابة **تفاصيل المشوار والسعر** المتوقع الآن:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            # المستخدم ضغط على الزر داخل "القروب" -> تحويله للبوت برابط سريع
-            bot_username = context.bot.username
-            # الرابط السريع الذي سينفذ التسجيل التلقائي في دالة start
-            url = f"https://t.me/{bot_username}?start=order_{driver_id}"
-            
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار", url=url)
-            ]])
-            
-            await query.edit_message_text(
-                "📥 **خطوة واحدة متبقية!**\n\n"
-                "انتقل إلى البوت الآن لكتابة تفاصيل مشوارك وتحديد السعر مع الكابتن مباشرة بشكل خاص وآمن.",
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        return
-
 
     # --- منطق تبديل الأحياء ---
         # --- 1. معالجة الضغط على اسم الحي (تبديل الحالة) ---
