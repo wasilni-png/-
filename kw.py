@@ -375,52 +375,84 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
-    
-    # 1. تنظيف أي حالات سابقة لضمان بداية نظيفة
+
+    # 1. تنظيف الذاكرة لضمان بداية جديدة
     context.user_data.clear()
 
-    # 2. فحص المعاملات القادمة من الرابط (context.args)
+    # 2. فحص المعاملات القادمة من الروابط (Deep Linking)
     if context.args:
         arg_value = context.args[0]
 
-        # --- الحالة الأولى: طلب كابتن محدد (order_8563113166) ---
-        if arg_value.startswith("order_") and arg_value != "order_general":
+        # ---------------------------------------------------------
+        # (أ) حالة التسجيل المباشر كراكب (من زر الترحيب)
+        # ---------------------------------------------------------
+        if arg_value == "reg_rider":
+            # 1. تسجيل المستخدم في قاعدة البيانات فوراً
+            await auto_register_rider(update) 
+            
+            # 2. إرسال رسالة ترحيب وعرض القائمة الرئيسية
+            await update.message.reply_text(
+                f"🎉 **حياك الله يا {first_name}!**\n"
+                "تم تسجيل دخولك كراكب بنجاح.\nيمكنك الآن طلب المشاوير بسهولة.",
+                reply_markup=get_main_kb('rider', True), # قائمة الراكب
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        # ---------------------------------------------------------
+        # (ب) حالة التسجيل ككابتن (من زر الترحيب)
+        # ---------------------------------------------------------
+        elif arg_value == "reg_driver":
+            # 1. تهيئة الذاكرة لاستقبال بيانات الكابتن
+            context.user_data['reg_role'] = 'driver'
+            context.user_data['state'] = 'WAIT_NAME' # تحويل الحالة لانتظار الاسم
+
+            # 2. طلب الاسم الأول
+            msg = (
+                "🚗 **أهلاً بك يا كابتن في فريقنا!**\n\n"
+                "لإتمام تسجيلك، نحتاج لبعض البيانات البسيطة.\n"
+                "📝 **يرجى كتابة اسمك الثلاثي الآن:**"
+            )
+            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # ---------------------------------------------------------
+        # (ج) حالة طلب مشوار محدد (order_ID)
+        # ---------------------------------------------------------
+        elif arg_value.startswith("order_") and arg_value != "order_general":
             try:
-                # استخراج ID الكابتن من النص بعد كلمة order_
                 driver_id = arg_value.split("_")[1]
                 
                 # تسجيل الراكب تلقائياً إذا كان جديداً
                 await sync_all_users()
                 if user_id not in USER_CACHE:
-                    await auto_register_rider(update) # دالة التسجيل الصامت
+                    await auto_register_rider(update)
 
-                # حفظ بيانات الطلب وتغيير الحالة فوراً
                 context.user_data.update({
                     'driver_to_order': driver_id,
                     'state': 'WAIT_TRIP_DETAILS'
                 })
 
                 await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}\n\n"
+                    f"👋 أهلاً بك يا {first_name}\n"
                     "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
                     "(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
                     reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return 
-
             except Exception as e:
-                print(f"Error in specific order: {e}")
+                print(f"Error: {e}")
 
-        # --- الحالة الثانية: الطلب العام (order_general) ---
+        # ---------------------------------------------------------
+        # (د) حالة الطلب العام (order_general)
+        # ---------------------------------------------------------
         elif arg_value == "order_general":
             await sync_all_users()
             if user_id not in USER_CACHE:
                 await auto_register_rider(update)
 
-            # تغيير الحالة إلى انتظار تفاصيل الطلب العام
             context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
-            
             await update.message.reply_text(
                 "🌍 **بدء طلب مشوار عام (عبر GPS)**\n\n"
                 "📝 اكتب تفاصيل مشوارك الآن (الوجهة والوقت):",
@@ -429,15 +461,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # 3. المسار الطبيعي (إذا دخل المستخدم للبوت يدوياً)
+    # 3. المسار الطبيعي (الدخول اليدوي للبوت بدون روابط)
     await sync_all_users()
     user = USER_CACHE.get(user_id)
     if user:
-        await update.message.reply_text(f"أهلاً بك مجدداً {user['name']}", reply_markup=get_main_kb(user['role'], user['is_verified']))
+        await update.message.reply_text(
+            f"أهلاً بك مجدداً {user['name']}", 
+            reply_markup=get_main_kb(user['role'], user['is_verified'])
+        )
     else:
-        # عرض أزرار التسجيل اليدوي
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("👤 تسجيل راكب", callback_data="reg_rider"), InlineKeyboardButton("🚗 تسجيل كابتن", callback_data="reg_driver")]])
-        await update.message.reply_text(f"مرحباً بك {first_name}، سجل الآن للبدء:", reply_markup=kb)
+        # عرض أزرار التسجيل اليدوي (للمستخدم الذي يبحث عن البوت يدوياً)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 تسجيل راكب", callback_data="reg_rider"),
+             InlineKeyboardButton("🚗 تسجيل كابتن", callback_data="reg_driver")]
+        ])
+        await update.message.reply_text(
+            f"مرحباً بك {first_name}، أنت غير مسجل لدينا.\nاختر نوع الحساب للبدء:", 
+            reply_markup=kb
+        )
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
 async def auto_register_rider(update):
