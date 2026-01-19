@@ -1505,9 +1505,28 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    
+    # بناء أزرار المدن من القاموس الشامل
+    cities = list(CITIES_DISTRICTS.keys())
+    keyboard = []
+    
+    for i in range(0, len(cities), 2):
+        row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_{cities[i]}")]
+        if i + 1 < len(cities):
+            row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_{cities[i+1]}"))
+        keyboard.append(row)
+
+    text = "📍 **من فضلك اختر المدينة التي تعمل بها أولاً:**"
+    
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str):
+    query = update.callback_query
     user_id = update.effective_user.id
     
-    # 1. جلب البيانات مباشرة من قاعدة البيانات (لضمان الدقة 100%)
+    # 1. جلب أحياء المستخدم الحالية من القاعدة
     conn = get_db_connection()
     current_districts = []
     if conn:
@@ -1515,12 +1534,11 @@ async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_
             cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
             res = cur.fetchone()
             if res and res[0]:
-                # تحويل النص لقائمة مع تنظيف شامل للفواصل العربية والإنجليزية
                 current_districts = [d.strip() for d in res[0].replace("،", ",").split(",") if d.strip()]
         conn.close()
 
-    # 2. بناء الأزرار بناءً على القائمة المحدثة
-    all_districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    # 2. جلب أحياء المدينة المختارة بدلاً من "المدينة المنورة" فقط
+    all_districts = CITIES_DISTRICTS.get(city_name, [])
     keyboard = []
     
     for i in range(0, len(all_districts), 2):
@@ -1528,38 +1546,17 @@ async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_
         for j in range(2):
             if i + j < len(all_districts):
                 dist_name = all_districts[i + j]
-                # التحقق مما إذا كان الحي موجوداً في القائمة الحالية
                 status = "✅ " if dist_name in current_districts else "⬜ "
+                # نرسل اسم الحي مع المدينة في callback_data لضمان الدقة
                 row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
         keyboard.append(row)
     
+    keyboard.append([InlineKeyboardButton("🔙 العودة للمدن", callback_data="back_to_cities")])
     keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="save_districts")])
 
-    text = (
-        "📍 **إعدادات نطاق العمل:**\n\n"
-        "اختر الأحياء التي تتواجد فيها دائماً.\n"
-        "سيقوم البوت بتنبيهك فوراً عند وجود طلب في هذه الأحياء."
-    )
+    text = f"🏙 **أحياء {city_name}:**\nاختر الأحياء التي تغطيها وسيقوم البوت بتنبيهك عند وجود طلب فيها."
     
-    # 3. إرسال أو تعديل الرسالة
-    try:
-        if query:
-            await query.edit_message_text(
-                text, 
-                reply_markup=InlineKeyboardMarkup(keyboard), 
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            await update.message.reply_text(
-                text, 
-                reply_markup=InlineKeyboardMarkup(keyboard), 
-                parse_mode=ParseMode.MARKDOWN
-            )
-    except Exception as e:
-        # التعامل مع خطأ "Message is not modified" إذا ضغط المستخدم بسرعة
-        if "Message is not modified" not in str(e):
-            print(f"Error in districts_view: {e}")
-
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 # --- أوامر الأدمن ---
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
