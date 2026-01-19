@@ -1664,7 +1664,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if matched_drivers:
         keyboard = []
         for d in matched_drivers[:6]:
-    driver_id = d['user_id']
+        driver_id = d['user_id']
     # الرابط يحتوي فقط على كلمة order_ متبوعة بـ ID الكابتن
     deep_link = f"https://t.me/{context.bot.username}?start=order_{driver_id}"
     
