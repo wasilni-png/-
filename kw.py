@@ -1949,6 +1949,7 @@ def main():
     application.add_handler(CommandHandler("sub", admin_add_days), group=0)
     application.add_handler(CommandHandler("broadcast", admin_broadcast), group=0)
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
+    application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"), group=0)
     application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
