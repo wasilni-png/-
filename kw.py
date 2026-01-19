@@ -376,106 +376,84 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
     
-    # تنظيف الذاكرة المؤقتة لضمان عدم تداخل الحالات السابقة
+    # 1. تنظيف أي حالات سابقة لضمان بداية نظيفة
     context.user_data.clear()
 
-    # أ) معالجة الروابط العميقة (Deep Links) القادمة من القروب أو الروابط الخارجية
-    if context.args and len(context.args) > 0:
+    # 2. فحص المعاملات القادمة من الرابط (context.args)
+    if context.args:
         arg_value = context.args[0]
 
-        # 1. حالة التسجيل السريع كراكب (من زر الترحيب)
-        if arg_value == "reg_rider":
-            context.user_data['reg_role'] = 'rider'
-            # رقم افتراضي للراكب لتجاوز التحقق
-            context.user_data['reg_phone'] = "0000000000"
-            full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
-            
-            await update.message.reply_text("⏳ **أهلاً بك!**\nجاري تهيئة حسابك كراكب، لحظات فقط...")
-            # استدعاء دالة إكمال التسجيل مباشرة
-            await complete_registration(update, context, full_name)
-            return
+        # --- الحالة الأولى: طلب كابتن محدد (order_8563113166) ---
+        if arg_value.startswith("order_") and arg_value != "order_general":
+            try:
+                # استخراج ID الكابتن من النص بعد كلمة order_
+                driver_id = arg_value.split("_")[1]
+                
+                # تسجيل الراكب تلقائياً إذا كان جديداً
+                await sync_all_users()
+                if user_id not in USER_CACHE:
+                    await auto_register_rider(update) # دالة التسجيل الصامت
 
-        # 2. حالة التسجيل ككابتن (من زر الترحيب)
-    elif arg_value == "reg_driver":
-            context.user_data['reg_role'] = 'driver'
-            context.user_data['state'] = 'WAIT_NAME'
-            
-            msg = (
-                "🚗 **أهلاً بك يا كابتن!**\n\n"
-                "نتشرف بانضمامك لفريقنا. لتوثيق حسابك، يرجى إرسال:\n"
-                "📝 **اسمك الثلاثي الحقيقي** الآن:"
-            )
-            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-            return
+                # حفظ بيانات الطلب وتغيير الحالة فوراً
+                context.user_data.update({
+                    'driver_to_order': driver_id,
+                    'state': 'WAIT_TRIP_DETAILS'
+                })
 
-        # حالة طلب مشوار عام (عبر GPS) عند عدم وجود كابتن في الحي
-    elif arg_value == "order_general":
-            # 1. التسجيل التلقائي للراكب إذا لم يكن مسجلاً
+                await update.message.reply_text(
+                    f"👋 أهلاً بك يا {first_name}\n\n"
+                    "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                    "(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return 
+
+            except Exception as e:
+                print(f"Error in specific order: {e}")
+
+        # --- الحالة الثانية: الطلب العام (order_general) ---
+        elif arg_value == "order_general":
             await sync_all_users()
             if user_id not in USER_CACHE:
-                conn = get_db_connection()
-                if conn:
-                    with conn.cursor() as cur:
-                        full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
-                        cur.execute("""
-                            INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (user_id) DO NOTHING
-                        """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
-                        conn.commit()
-                    conn.close()
-                    await sync_all_users(force=True)
+                await auto_register_rider(update)
 
-            # 2. توجيه الراكب لكتابة التفاصيل فوراً (المرحلة الأولى من الطلب العام)
-            context.user_data.update({
-                'state': 'WAIT_GENERAL_DETAILS'
-            })
-
+            # تغيير الحالة إلى انتظار تفاصيل الطلب العام
+            context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
+            
             await update.message.reply_text(
-                "🌍 **بدء بحث عام عن أقرب كابتن (GPS)**\n\n"
-                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-                "(مثال: من حي السلام إلى سوق المدينة، نحتاج سيارة واسعة)",
+                "🌍 **بدء طلب مشوار عام (عبر GPS)**\n\n"
+                "📝 اكتب تفاصيل مشوارك الآن (الوجهة والوقت):",
                 reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
 
-    elif data.startswith("book_"):
-        parts = data.split("_")
-        driver_id = parts[1]
-        dist_name = parts[2] if len(parts) > 2 else "غير محدد"
-        
-        # 1. حفظ البيانات في ذاكرة المستخدم
-        context.user_data['driver_to_order'] = driver_id
-        context.user_data['order_dist'] = dist_name
+    # 3. المسار الطبيعي (إذا دخل المستخدم للبوت يدوياً)
+    await sync_all_users()
+    user = USER_CACHE.get(user_id)
+    if user:
+        await update.message.reply_text(f"أهلاً بك مجدداً {user['name']}", reply_markup=get_main_kb(user['role'], user['is_verified']))
+    else:
+        # عرض أزرار التسجيل اليدوي
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("👤 تسجيل راكب", callback_data="reg_rider"), InlineKeyboardButton("🚗 تسجيل كابتن", callback_data="reg_driver")]])
+        await update.message.reply_text(f"مرحباً بك {first_name}، سجل الآن للبدء:", reply_markup=kb)
 
-        # 2. التحقق: هل الضغط تم داخل البوت (خاص) أم في المجموعة؟
-        if update.effective_chat.type == "private":
-            # المستخدم داخل البوت -> اطلب التفاصيل فوراً
-            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-            await query.edit_message_text(
-                f"📝 **طلب مشوار - حي {dist_name}**\n\n"
-                "يرجى كتابة **تفاصيل المشوار والسعر** المتوقع الآن:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            # المستخدم ضغط على الزر داخل "القروب" -> تحويله للبوت برابط سريع
-            bot_username = context.bot.username
-            # الرابط السريع الذي سينفذ التسجيل التلقائي في دالة start
-            url = f"https://t.me/{bot_username}?start=order_{driver_id}"
-            
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار", url=url)
-            ]])
-            
-            await query.edit_message_text(
-                "📥 **خطوة واحدة متبقية!**\n\n"
-                "انتقل إلى البوت الآن لكتابة تفاصيل مشوارك وتحديد السعر مع الكابتن مباشرة بشكل خاص وآمن.",
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        return
-
+# دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
+async def auto_register_rider(update):
+    user_id = update.effective_user.id
+    full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
+            conn.commit()
+        conn.close()
+        await sync_all_users(force=True)
 
 
 
