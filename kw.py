@@ -842,7 +842,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         return
 
-if state is None:
+    if state is None:
         user = update.effective_user
         user_id = user.id
         text = update.message.text
