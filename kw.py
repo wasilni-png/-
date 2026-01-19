@@ -731,125 +731,104 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- المعالج الشامل (Global Handler) ---
 async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # السماح بمرور الرسائل النصية أو الرسائل التي تحتوي على موقع
+    # 1. التحقق المبدئي: هل يوجد رسالة؟
     if not update.message: return
     
-    # إذا لم يكن هناك نص ولا موقع، اخرج (لتجنب الصور والملفات مثلاً)
-    if not update.message.text and not update.message.location:
-        return
-
-    user_id = update.effective_user.id
+    # استخراج البيانات
+    user = update.effective_user
+    user_id = user.id
     state = context.user_data.get('state')
+    # نستخدم النص إذا وجد، وإلا نص فارغ (لتجنب الأخطاء مع الصور)
     text = update.message.text if update.message.text else ""
 
-    # الآن، إذا كان المستخدم أرسل موقعه وهو في حالة انتظار الموقع للطلب
-    if update.message.location and state == 'WAIT_LOCATION_FOR_ORDER':
-        # نقوم بتحويل المعالجة يدوياً لدالة الموقع لضمان عدم ضياع الطلب
+    # ---------------------------------------------------------
+    # [الفلتر الأول] المحادثات النشطة (Chat Relay)
+    # ---------------------------------------------------------
+    # إذا كان المستخدم يتحدث حالياً مع طرف آخر (كابتن/راكب)، اخرج فوراً
+    if get_chat_partner(user_id):
+        return 
+
+    # ---------------------------------------------------------
+    # [الفلتر الثاني] معالجة الموقع (Location)
+    # ---------------------------------------------------------
+    if update.message.location:
+        # سواء كان لطلب أو تحديث عادي، نحوله لدالة الموقع ونخرج
         return await location_handler(update, context)
 
-    # --- 1. التواصل مع الإدارة ---
-    if text == "📞 تواصل مع الإدارة":
-        await contact_admin_start(update, context)
-        return
+    # ---------------------------------------------------------
+    # [الفلتر الثالث] معالجة حالات البوت (States)
+    # ---------------------------------------------------------
+    if state:
+        # --- أ) خطوات التسجيل ---
+        if state == 'WAIT_NAME':
+            context.user_data['reg_name'] = text
+            context.user_data['state'] = 'WAIT_PHONE'
+            await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
+            return
 
-    if state == 'WAIT_ADMIN_MESSAGE':
-        if text == "❌ إلغاء المراسلة":
+        if state == 'WAIT_PHONE':
+            phone_input = text.strip()
+            # التحقق من صحة الرقم (يبدأ بـ 05 و 10 أرقام)
+            if not re.fullmatch(r'05\d{8}', phone_input):
+                await update.message.reply_text("⚠️ **الرقم غير صحيح..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
+                return
+            
+            # الحفظ والإتمام
+            context.user_data['reg_phone'] = phone_input
+            await complete_registration(update, context, context.user_data['reg_name'])
             context.user_data['state'] = None
-            await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
-            return
-        
-        for aid in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=aid,
-                    text=f"📩 **رسالة دعم جديدة**\nمن: {update.effective_user.first_name}\nID: `{user_id}`\n\n💬 النص: {text}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except: pass
-        await update.message.reply_text("✅ تم إرسال رسالتك للإدارة.")
-        context.user_data['state'] = None
-        return
-
-    # --- 2. إصلاح خطوات التسجيل ---
-       # تأكد أن هذا الكود داخل دالة المعالج الأساسية ومحاذاته صحيحة
-    
-# داخل الـ global_handler الخاص بك:
-    if state == 'WAIT_PHONE':
-        # تنظيف النص من المسافات
-        phone_input = text.strip()
-        
-        # التحقق: يبدأ بـ 05 ويتكون من 10 أرقام
-    if state == 'WAIT_NAME':
-        context.user_data['reg_name'] = text
-        # تحديث الحالة إلى انتظار الرقم
-        context.user_data['state'] = 'WAIT_PHONE'
-        await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
-        return  # ضروري جداً لإنهاء الدالة هنا
-
-    # --- 2. مرحلة إدخال الرقم (التحقق ثم الحفظ) 
-
-    if state == 'WAIT_PHONE':
-        phone_input = text.strip()
-        
-        # 1. التحقق من صحة الرقم (يجب أن يكون مزاحاً للداخل بـ 8 مسافات)
-        
-        if not re.fullmatch(r'05\d{8}', phone_input):
-            await update.message.reply_text("⚠️ **الرقم غير صحيح يا غالي..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
 
-        # 2. حفظ الرقم وإكمال التسجيل
-        context.user_data['reg_phone'] = phone_input
-        await complete_registration(update, context, context.user_data['reg_name'])
-        context.user_data['state'] = None
-        return
+        # --- ب) طلب مشوار خاص (كابتن محدد) ---
+        if state == 'WAIT_TRIP_DETAILS':
+            context.user_data['trip_details'] = text 
+            context.user_data['state'] = 'WAIT_TRIP_PRICE'
+            await update.message.reply_text("💰 **كم السعر المعروض؟** (أرقام فقط):")
+            return
 
+        if state == 'WAIT_TRIP_PRICE':
+            if not text.isdigit(): # التأكد أنها أرقام فقط
+                await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
+                return
 
-
-
-    # --- 3. طلب مشوار خاص (كابتن محدد) ---
-    if state == 'WAIT_TRIP_DETAILS':
-        context.user_data['trip_details'] = text 
-        context.user_data['state'] = 'WAIT_TRIP_PRICE'
-        await update.message.reply_text("💰 **كم السعر المعروض؟** (أرقام فقط):")
-        return
-
-    if state == 'WAIT_TRIP_PRICE':
-        try:
-            price = float(text)
+            price = text # نحفظه كنص أو نحوله لـ float حسب رغبتك
             details = context.user_data.get('trip_details')
             driver_id = context.user_data.get('driver_to_order')
             
-            # إرسال الطلب للكابتن
+            # إعداد الزر للكابتن
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ قبول الطلب", callback_data=f"accept_ride_{user_id}_{price}"),
+                [InlineKeyboardButton("✅ قبول", callback_data=f"accept_ride_{user_id}_{price}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{user_id}")]
             ])
+            
             try:
                 await context.bot.send_message(
                     chat_id=driver_id,
-                    text=f"🔔 **طلب خاص لك!**\nتفاصيل: {details}\nالسعر: {price} ريال",
+                    text=f"🚨 **طلب خاص لك!**\n📝 التفاصيل: {details}\n💰 السعر: {price} ريال",
                     reply_markup=kb
                 )
                 await update.message.reply_text("✅ تم إرسال العرض للكابتن، انتظر الموافقة.")
             except:
-                await update.message.reply_text("❌ تعذر الوصول للكابتن.")
+                await update.message.reply_text("❌ تعذر الوصول للكابتن (قد يكون حظر البوت).")
             
             context.user_data['state'] = None 
-        except ValueError:
-            await update.message.reply_text("⚠️ أرقام فقط لو سمحت.")
-        return
+            return
 
-    # --- 4. طلب مشوار عام (GPS) ---
-    if state == 'WAIT_GENERAL_DETAILS':
-        context.user_data['search_district'] = text
-        context.user_data['state'] = 'WAIT_GENERAL_PRICE'
-        await update.message.reply_text("💰 **كم السعر المقترح؟** (أرقام فقط):")
-        return
+        # --- ج) طلب مشوار عام (لأقرب كابتن/GPS) ---
+        if state == 'WAIT_GENERAL_DETAILS':
+            context.user_data['search_district'] = text # أو تفاصيل المشوار
+            context.user_data['state'] = 'WAIT_GENERAL_PRICE'
+            await update.message.reply_text("💰 **كم السعر المقترح؟** (أرقام فقط):")
+            return
 
-    if state == 'WAIT_GENERAL_PRICE':
-        try:
+        if state == 'WAIT_GENERAL_PRICE':
+            if not text.replace('.', '', 1).isdigit():
+                await update.message.reply_text("⚠️ أرقام فقط.")
+                return
+
             context.user_data['order_price'] = float(text)
             
+            # طلب الموقع لإتمام العملية
             kb = ReplyKeyboardMarkup([
                 [KeyboardButton("📍 مشاركة موقعي لإرسال الطلب", request_location=True)],
                 [KeyboardButton("❌ إلغاء الطلب")]
@@ -859,41 +838,64 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📍 الآن اضغط الزر بالأسفل لمشاركة موقعك وتعميم الطلب:",
                 reply_markup=kb
             )
-            # هذه الحالة ستلتقطها دالة location_handler المصححة
+            # نغير الحالة لانتظار الموقع، وسيتكفل location_handler بالباقي
             context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER' 
-        except ValueError:
-            await update.message.reply_text("⚠️ أرقام فقط.")
-        return
+            return
 
-    # إذا كانت الحالة انتظار السعر لطلب "كابتن محدد"
-    if state == 'WAIT_TRIP_PRICE':
-        if text.isdigit():
-            price = text
-            details = context.user_data.get('trip_details')
-            driver_id = context.user_data.get('driver_to_order')
+        # --- د) إعدادات السائقين والبحث ---
+        if state == 'WAIT_DISTRICTS':
+            # تحديث الأحياء في قاعدة البيانات
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (text, user_id))
+                conn.commit()
+            conn.close() # لا تنس إغلاق الاتصال
             
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ قبول", callback_data=f"accept_ride_{user_id}_{price}"),
-                 InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{user_id}")]
-            ])
-            
-            # إرسال للكابتن
-            await context.bot.send_message(
-                chat_id=driver_id,
-                text=f"🚨 **طلب مشوار خاص!**\n\n👤 العميل: {update.effective_user.first_name}\n📝 التفاصيل: {details}\n💰 السعر: {price} ريال",
-                reply_markup=kb
-            )
-            await update.message.reply_text("✅ تم إرسال طلبك للكابتن، انتظر الموافقة.")
+            await sync_all_users() # تحديث الكاش
+            await update.message.reply_text("✅ تم تحديث مناطق عملك بنجاح.")
             context.user_data['state'] = None
-        else:
-            await update.message.reply_text("⚠️ أرقام فقط للسعر.")
-        return
+            return
 
+        if state == 'WAIT_ELITE_DISTRICT':
+            # البحث عن كابتن في حي معين
+            found = []
+            await sync_all_users() # تأكيد التحديث
+            
+            for d in CACHED_DRIVERS:
+                # نفترض أن districts مخزنة كنص مفصول بفواصل
+                if d.get('districts') and text in d['districts']:
+                    found.append(d)
 
-    # --- 5. القائمة الرئيسية ---
-    # 5. أوامر القائمة الرئيسية (Main Menu
+            if not found:
+                await update.message.reply_text(f"❌ لا يوجد كابتن مسجل في حي '{text}' حالياً.")
+            else:
+                await update.message.reply_text(f"✅ وجدنا {len(found)} كابتن:")
+                for d in found:
+                    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"📞 طلب {d['name']}", callback_data=f"book_{d['user_id']}_{text}") ]])
+                    await update.message.reply_text(f"👤 {d['name']}\n🚗 {d.get('car_info', 'غير محدد')}", reply_markup=kb)
+            
+            context.user_data['state'] = None
+            return
+
+        # --- هـ) تواصل الإدارة الصريح ---
+        if state == 'WAIT_ADMIN_MESSAGE':
+            if text == "❌ إلغاء المراسلة":
+                context.user_data['state'] = None
+                await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
+                return
+            # إذا لم يلغِ، نتركه يمر للجزء الأخير (Support Msg) ليتم إرساله
+            pass 
+
+    # ---------------------------------------------------------
+    # [الفلتر الرابع] أوامر القائمة الرئيسية (Buttons)
+    # ---------------------------------------------------------
+    # نضع جميع نصوص الأزرار هنا لمنع وصولها للأدمن
     if text == "🚖 طلب رحلة":
         await order_ride_options(update, context)
+        return
+
+    if text == "📞 تواصل مع الإدارة":
+        await contact_admin_start(update, context)
         return
 
     if text == "📍 تحديث موقعي":
@@ -901,104 +903,81 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "💰 محفظتي":
-        user = USER_CACHE.get(user_id)
-        bal = user.get('balance', 0) if user else 0
+        user_data = USER_CACHE.get(user_id)
+        bal = user_data.get('balance', 0) if user_data else 0
         await update.message.reply_text(f"💳 رصيدك الحالي: {bal} ريال")
         return
 
-        # استبدال الكود القديم بهذا
     if text == "📍 مناطق عملي" or text == "📝 تحديث الأحياء":
         await districts_settings_view(update, context)
         return
 
-
     if text == "ℹ️ حالة اشتراكي":
-        user = USER_CACHE.get(user_id)
-        if user and user.get('subscription_expiry'):
-             expiry = user['subscription_expiry'].strftime('%Y-%m-%d')
-             await update.message.reply_text(f"📅 اشتراكك ينتهي في: {expiry}")
+        user_data = USER_CACHE.get(user_id)
+        if user_data and user_data.get('subscription_expiry'):
+             # تأكد أن expiry كائن datetime
+             expiry = user_data['subscription_expiry']
+             # تحويل بسيط للتاريخ
+             fmt_date = expiry.strftime('%Y-%m-%d') if hasattr(expiry, 'strftime') else str(expiry)
+             await update.message.reply_text(f"📅 اشتراكك ينتهي في: {fmt_date}")
         else:
              await update.message.reply_text("❌ ليس لديك اشتراك فعال.")
         return
-
-    # ---------------------------------------------------------
-    # 6. معالجة إدخالات السائقين والبحث النصي
-    # ---------------------------------------------------------
-    if state == 'WAIT_DISTRICTS':
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (text, user_id))
-            conn.commit()
-        await sync_all_users()
-        await update.message.reply_text("✅ تم تحديث الأحياء بنجاح.")
-        context.user_data['state'] = None
-        return
-
-    if state == 'WAIT_ELITE_DISTRICT':
-        # بحث نصي في الأحياء
-        found = []
-        # التأكد من تحديث الكاش أولاً
-        await sync_all_users()
-        
-        for d in CACHED_DRIVERS:
-            if d.get('districts') and text in d['districts']:
-                found.append(d)
-
-        if not found:
-            await update.message.reply_text("❌ لا يوجد كابتن مسجل في هذا الحي حالياً.")
-        else:
-            await update.message.reply_text(f"✅ وجدنا {len(found)} كابتن في {text}:")
-            for d in found:
-                # زر الطلب هنا ينقل لطلب خاص
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"📞 طلب {d['name']}", callback_data=f"book_{d['user_id']}_{text}") ]])
-                await update.message.reply_text(f"👤 الكابتن: {d['name']}\n🚗 {d['car_info']}", reply_markup=kb)
-        context.user_data['state'] = None
-        return
-
-    if state is None:
-        user = update.effective_user
-        user_id = user.id
-        text = update.message.text
-
-
-
     
-    # 1. إعداد رسالة التنبيه للأدمن
-    admin_text = (
-        f"📩 **رسالة واردة (دعم فني)**\n"
-        f"👤 الاسم: {user.full_name}\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"🔗 المعرف: @{user.username if user.username else 'لا يوجد'}\n"
-        f"─────────────────\n"
-        f"💡 للرد عليه، قم بعمل (Reply) على هذه الرسالة."
-    )
+    # يمكن إضافة "❌ إلغاء الطلب" هنا أيضاً إذا كان زر عام
+    if text == "❌ إلغاء الطلب":
+        context.user_data['state'] = None
+        await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_kb(context.user_data.get('role', 'rider')))
+        return
 
-    # 2. أزرار التحكم السريع للأدمن
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🚫 حظر", callback_data=f"admin_block_{user_id}"),
-            InlineKeyboardButton("💰 شحن", callback_data=f"admin_quickcash_{user_id}")
-        ]
-    ])
+    # ---------------------------------------------------------
+    # [المرحلة النهائية] إرسال الرسائل المجهولة للأدمن
+    # ---------------------------------------------------------
+    # إذا وصل الكود هنا، فهذا يعني:
+    # 1. ليست محادثة نشطة.
+    # 2. ليست خطوة تسجيل أو طلب.
+    # 3. ليس زر قائمة رئيسية.
+    # إذن هي --> رسالة استفسار/دعم فني.
 
-    # 3. الإرسال لكل المشرفين
-    for aid in ADMIN_IDS:
-        try:
-            # إرسال بطاقة المعلومات
-            await context.bot.send_message(chat_id=aid, text=admin_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-            # تحويل رسالة المستخدم الأصلية
-            await context.bot.copy_message(chat_id=aid, from_chat_id=user_id, message_id=update.message.message_id)
-        except: pass
-
-    # 4. حفظ الرسالة الواردة في السجلات (من العضو للنظام/الأدمن)
-    # نستخدم الرقم 0 أو ID أول أدمن كـ receiver_id رمزي
-    save_chat_log(user_id, ADMIN_IDS[0], text or "[وسائط]", "support_msg")
-
-    # 5. رسالة تأكيد للمستخدم (اختياري - حتى يعرف أن صوته وصل)
-    # نرسلها فقط إذا لم يكن يكتب في مجموعة
+    # تأكيد أخير أنها في الخاص وليست في مجموعة
     if update.message.chat.type == "private":
-        await update.message.reply_text("📨 تم استلام رسالتك وتحويلها لفريق الدعم. سيتم الرد عليك قريباً.")
+        
+        # 1. تجهيز الرسالة للأدمن
+        admin_text = (
+            f"📩 **رسالة واردة (دعم فني)**\n"
+            f"👤 الاسم: {user.full_name}\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"🔗 المعرف: @{user.username if user.username else 'لا يوجد'}\n"
+            f"📝 النص: {text}\n"
+            f"─────────────────\n"
+            f"💡 للرد عليه، قم بعمل (Reply) على هذه الرسالة."
+        )
 
+        # 2. أزرار التحكم
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚫 حظر", callback_data=f"admin_block_{user_id}"),
+                InlineKeyboardButton("💰 شحن", callback_data=f"admin_quickcash_{user_id}")
+            ]
+        ])
+
+        # 3. الإرسال لكل المشرفين
+        for aid in ADMIN_IDS:
+            try:
+                # إرسال بطاقة المعلومات
+                await context.bot.send_message(chat_id=aid, text=admin_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+                # تحويل رسالة المستخدم الأصلية (مفيد إذا كانت صورة أو فيديو)
+                await context.bot.copy_message(chat_id=aid, from_chat_id=user_id, message_id=update.message.message_id)
+            except: pass
+
+        # 4. حفظ في السجل
+        # تأكد من أن دالة save_chat_log موجودة ومستوردة
+        save_chat_log(user_id, ADMIN_IDS[0], text or "[ملف/موقع]", "support_msg")
+
+        # 5. إشعار المستخدم (مرة واحدة)
+        # لتجنب التكرار، نرسل التأكيد فقط إذا لم يكن في حالة تواصل مسبق
+        # (اختياري: يمكنك إزالة هذا السطر إذا كنت تراه مزعجاً)
+        await update.message.reply_text("📨 تم استلام رسالتك وتحويلها لفريق الدعم.")
 
 # --- معالجة المواقع (Location) ---
 
@@ -1353,40 +1332,40 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
+        # هذا الجزء يوضع داخل معالج الـ CallbackQuery (عند الضغط على زر الكابتن في القروب)
     elif data.startswith("book_"):
         parts = data.split("_")
         driver_id = parts[1]
-        dist_name = parts[2] if len(parts) > 2 else "غير محدد"
         
-        # 1. حفظ البيانات في ذاكرة المستخدم
-        context.user_data['driver_to_order'] = driver_id
-        context.user_data['order_dist'] = dist_name
+        # استخراج اسم الحي إذا كان موجوداً في البيانات
+        dist_name = parts[2] if len(parts) > 2 else "المحدد"
 
-        # 2. التحقق: هل الضغط تم داخل البوت (خاص) أم في المجموعة؟
-        if update.effective_chat.type == "private":
-            # المستخدم داخل البوت -> اطلب التفاصيل فوراً
-            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-            await query.edit_message_text(
-                f"📝 **طلب مشوار - حي {dist_name}**\n\n"
-                "يرجى كتابة **تفاصيل المشوار والسعر** المتوقع الآن:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            # المستخدم ضغط على الزر داخل "القروب" -> تحويله للبوت برابط سريع
+        # التحقق من نوع الشات (إذا كان في القروب نحوله للبوت)
+        if update.effective_chat.type != "private":
             bot_username = context.bot.username
-            # الرابط السريع الذي سينفذ التسجيل التلقائي في دالة start
+            
+            # الرابط العميق الذي يمرر ID الكابتن لـ Start Command
             url = f"https://t.me/{bot_username}?start=order_{driver_id}"
             
+            # الزر الذي ينقصك لإكمال الطلب
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار", url=url)
+                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار والسعر", url=url)
             ]])
             
             await query.edit_message_text(
-                "📥 **خطوة واحدة متبقية!**\n\n"
-                "انتقل إلى البوت الآن لكتابة تفاصيل مشوارك وتحديد السعر مع الكابتن مباشرة بشكل خاص وآمن.",
+                f"📥 **لقد اخترت كابتن في حي {dist_name}**\n\n"
+                "لإكمال الطلب وحماية خصوصيتك، اضغط على الزر بالأسفل ثم اضغط (ابدأ/Start) واكتب تفاصيل مشوارك.",
                 reply_markup=kb,
                 parse_mode=ParseMode.MARKDOWN
             )
+        else:
+            # إذا كان المستخدم يضغط من داخل البوت أصلاً (نادر الحدوث في هذا السياق)
+            context.user_data.update({
+                'driver_to_order': driver_id,
+                'state': 'WAIT_TRIP_DETAILS'
+            })
+            await query.edit_message_text("📝 **اكتب تفاصيل مشوارك الآن:**")
+        
         return
 
     # ===============================================================
