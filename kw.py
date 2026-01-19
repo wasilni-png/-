@@ -397,7 +397,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # 2. حالة التسجيل ككابتن (من زر الترحيب)
-        elif arg_value == "reg_driver":
+    elif arg_value == "reg_driver":
             context.user_data['reg_role'] = 'driver'
             context.user_data['state'] = 'WAIT_NAME'
             
@@ -410,7 +410,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # حالة طلب مشوار عام (عبر GPS) عند عدم وجود كابتن في الحي
-        elif arg_value == "order_general":
+    elif arg_value == "order_general":
             # 1. التسجيل التلقائي للراكب إذا لم يكن مسجلاً
             await sync_all_users()
             if user_id not in USER_CACHE:
@@ -441,8 +441,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        elif data.startswith("book_"):
-            parts = data.split("_")
+    elif data.startswith("book_"):
+        parts = data.split("_")
         driver_id = parts[1]
         dist_name = parts[2] if len(parts) > 2 else "غير محدد"
         
@@ -482,7 +482,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
                 # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
-        elif arg_value.startswith("order_"):
+    elif arg_value.startswith("order_"):
             try:
                 # استخراج ID الكابتن فقط (لأن الحي لم نعد نطلبه في الرابط)
                 driver_id = arg_value.split("_")[1]
