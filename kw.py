@@ -320,70 +320,105 @@ def get_main_kb(role, is_verified=True):
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
 async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # التأكد من أن التحديث يحتوي على رسالة وأعضاء جدد
+    if not update.message or not update.message.new_chat_members:
+        return
+
     chat_id = update.effective_chat.id
-    
-    # رابط فيديو قصير (يمكنك استبداله برابط مباشر لملف MP4 أو معرف ملف على تليجرام)
-    video_url = "tg://openmessage?user_id=8531219319&message_id=4436" 
-    
-    welcome_text = (
-        "🚀 **أهلاً بك في بوت مشواري للتوصيل الذكي!**\n\n"
-        "يسعدنا انضمامك إلينا. المنصة الأسهل لربط الكباتن بالركاب في المدينة المنورة.\n\n"
-        "📺 شاهد الفيديو القصير أعلاه لمعرفة كيفية الطلب.\n"
-        "─────────────────\n"
-        "👇 للبدء أو للاستفسار، استخدم الأزرار أدناه:"
-    )
+    bot_username = context.bot.username
 
-    # إنشاء الأزرار (البوت والإدارة)
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🤖 ابدأ استخدام البوت", url="https://t.me/Fogtyjnbot"),
-            InlineKeyboardButton(" قناة التعليمات 🚘 ", url="https://t.me/mishwarii")
-        ]
-    ])
+    # روابط الدخول العميق (توجه المستخدم لـ start_command مع المعامل المناسب)
+    url_rider = f"https://t.me/{bot_username}?start=reg_rider"
+    url_driver = f"https://t.me/{bot_username}?start=reg_driver"
 
-    # إرسال الفيديو مع النص والأزرار
-    try:
-        await context.bot.send_video(
-            chat_id=chat_id,
-            video=video_url,
-            caption=welcome_text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        # في حال فشل إرسال الفيديو، أرسل النص فقط
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=welcome_text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.MARKDOWN
+    # رابط الفيديو (يفضل استخدام File ID إذا توفر، أو رابط قناة عامة)
+    video_url = "https://t.me/mishwarii/4436" 
+
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            continue # تجاهل الترحيب بالبوت نفسه
+
+        welcome_text = (
+            f"🚀 **أهلاً بك يا {member.first_name} في منصة مشواري!**\n\n"
+            "المنصة الأسهل لربط الكباتن بالركاب.\n"
+            "👇 **اختر دورك الآن للبدء فوراً:**"
         )
 
-# لا تنسى إضافة Handler لهذا الأمر في دالة main
-# application.add_handler(CommandHandler("welcome", send_fancy_welcome))
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("👤 دخول كراكب", url=url_rider),
+                InlineKeyboardButton("🚗 دخول ككابتن", url=url_driver)
+            ],
+            [InlineKeyboardButton("📜 قناة التعليمات", url="https://t.me/mishwarii")]
+        ])
+
+        try:
+            # محاولة إرسال الفيديو
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=video_url,
+                caption=welcome_text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            # البديل النصي في حال فشل الفيديو
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=welcome_text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+
 
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
-    context.user_data.clear() # تصفير أي حالة قديمة لضمان عدم تعليق البوت
+    
+    # تنظيف الذاكرة المؤقتة لضمان عدم تداخل الحالات السابقة
+    context.user_data.clear()
 
-    # 1. فحص إذا كان الدخول عبر رابط طلب مشوار (Deep Link) قادم من القروب
+    # أ) معالجة الروابط العميقة (Deep Links) القادمة من القروب أو الروابط الخارجية
     if context.args and len(context.args) > 0:
         arg_value = context.args[0]
 
-        # التعامل مع روابط الطلب (سواء بدأت بـ order_ أو req_)
-        if arg_value.startswith("order_") or arg_value.startswith("req_"):
+        # 1. حالة التسجيل السريع كراكب (من زر الترحيب)
+        if arg_value == "reg_rider":
+            context.user_data['reg_role'] = 'rider'
+            # رقم افتراضي للراكب لتجاوز التحقق
+            context.user_data['reg_phone'] = "0000000000"
+            full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+            
+            await update.message.reply_text("⏳ **أهلاً بك!**\nجاري تهيئة حسابك كراكب، لحظات فقط...")
+            # استدعاء دالة إكمال التسجيل مباشرة
+            await complete_registration(update, context, full_name)
+            return
+
+        # 2. حالة التسجيل ككابتن (من زر الترحيب)
+        elif arg_value == "reg_driver":
+            context.user_data['reg_role'] = 'driver'
+            context.user_data['state'] = 'WAIT_NAME'
+            
+            msg = (
+                "🚗 **أهلاً بك يا كابتن!**\n\n"
+                "نتشرف بانضمامك لفريقنا. لتوثيق حسابك، يرجى إرسال:\n"
+                "📝 **اسمك الثلاثي الحقيقي** الآن:"
+            )
+            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
+        elif arg_value.startswith(("order_", "req_")):
             try:
-                # 🔓 فك تشفير الرابط (لحل مشكلة الأسماء العربية مثل القبلتين)
+                # فك تشفير الرابط (للتعامل مع الأسماء العربية)
                 decoded_args = urllib.parse.unquote(arg_value)
                 parts = decoded_args.split("_")
 
                 if len(parts) >= 3:
                     driver_id = parts[1]
-                    # دمج الأجزاء المتبقية في حال كان اسم الحي يحتوي على "_"
-                    dist_name = "_".join(parts[2:]) 
+                    dist_name = "_".join(parts[2:]) # تجميع اسم الحي
 
                     context.user_data.update({
                         'driver_to_order': driver_id,
@@ -392,43 +427,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     })
 
                     await update.message.reply_text(
-                        f"👋 أهلاً بك يا {first_name}\n\n"
-                        f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n"
+                        f"📍 **طلب مشوار جديد**\n"
+                        f"وجهتك المختارة: **{dist_name}**\n"
                         "─────────────────\n"
-                        "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-                        "(مثلاً: من شارع المطار إلى الراشد مول الساعة 9 مساءً)",
+                        "📝 **اكتب تفاصيل مشوارك الآن:**\n"
+                        "(مثال: من العالية مول إلى الحرم، عددنا 3 أشخاص)",
                         reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                         parse_mode=ParseMode.MARKDOWN
                     )
-                    return # إنهاء الدالة هنا لضمان عدم ظهور رسالة الترحيب العادية
+                    return 
             except Exception as e:
-                logger.error(f"Error decoding deep link: {e}")
+                print(f"Deep Link Error: {e}")
 
-    # 2. الكود العادي للمستخدمين الذين دخلوا بدون رابط (القائمة الرئيسية)
-    await sync_all_users()
+    # ب) المسار العادي (بدون روابط) - فحص قاعدة البيانات
+    await sync_all_users() # تأكد أن هذه الدالة موجودة لديك
     user = USER_CACHE.get(user_id)
 
     if user:
-        # إذا كان المستخدم مسجلاً مسبقاً
-        role_name = "الكابتن" if user['role'] == 'driver' else "الراكب"
-        status_icon = "✅ موثق" if user['is_verified'] else "⏳ قيد المراجعة"
-        
-        welcome_text = (
-            f"👋 أهلاً بك مجدداً، {role_name} **{user['name']}**\n"
-            f"🛡️ الحالة: {status_icon}\n"
-            "─────────────────\n"
-            "🚀 استخدم القائمة بالأسفل للتحكم بالبوت."
-        )
+        # المستخدم مسجل مسبقاً -> عرض القائمة الرئيسية
+        role_txt = "الكابتن" if user['role'] == 'driver' else "الراكب"
         await update.message.reply_text(
-            welcome_text, 
-            reply_markup=get_main_kb(user['role'], user['is_verified']), 
+            f"👋 مرحباً بك مجدداً {role_txt} **{user['name']}**", 
+            reply_markup=get_main_kb(user['role'], user['is_verified']),
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        # إذا كان المستخدم جديداً (بدء عملية التسجيل)
+        # مستخدم جديد (دخل بشكل يدوي) -> عرض خيارات التسجيل
         welcome_new = (
             f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل!\n\n"
-            "أنت غير مسجل حالياً، يرجى اختيار نوع الحساب للبدء:"
+            "أنت غير مسجل لدينا، اختر نوع الحساب للبدء:"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
@@ -439,72 +466,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- التسجيل ---
 # --- التسجيل المحدث ---
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    first_name = update.effective_user.first_name
-    context.user_data.clear() # تنظيف الحالة لضمان عدم التعليق
 
-    # 1. فحص الروابط العميقة (Deep Links) القادمة من الخارج
-    if context.args and len(context.args) > 0:
-        arg_value = context.args[0]
+async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    await query.answer()
 
-        # --- [جديد] حالة التسجيل السريع كراكب من رسالة الترحيب ---
-        if arg_value == "reg_rider":
-            context.user_data['reg_role'] = 'rider'
-            context.user_data['reg_phone'] = "0000000000"
-            full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
-            await update.message.reply_text("⏳ أهلاً بك! جاري تهيئة حسابك كراكب...")
-            await complete_registration(update, context, full_name)
-            return
+    # تحديد الدور بناءً على الزر المضغوط
+    role = "rider" if query.data == "reg_rider" else "driver"
+    context.user_data['reg_role'] = role
 
-        # --- [جديد] حالة التسجيل ككابتن من رسالة الترحيب ---
-        elif arg_value == "reg_driver":
-            context.user_data['reg_role'] = 'driver'
-            context.user_data['state'] = 'WAIT_NAME'
-            await update.message.reply_text("🚗 **أهلاً بك يا كابتن!**\nنتشرف بانضمامك. أرسل اسمك الثلاثي الآن لبدء التوثيق:")
-            return
-
-        # --- [قديم - لا تحذفه!] حالة طلب مشوار من إعلان في القروب ---
-        elif arg_value.startswith(("order_", "req_")):
-            try:
-                decoded_args = urllib.parse.unquote(arg_value)
-                parts = decoded_args.split("_")
-                if len(parts) >= 3:
-                    driver_id = parts[1]
-                    dist_name = "_".join(parts[2:]) 
-                    context.user_data.update({
-                        'driver_to_order': driver_id,
-                        'order_dist': dist_name,
-                        'state': 'WAIT_TRIP_DETAILS'
-                    })
-                    await update.message.reply_text(
-                        f"📍 أنت تطلب كابتن في حي: **{dist_name}**\n"
-                        "📝 **يرجى كتابة تفاصيل مشوارك الآن:**",
-                        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    return 
-            except Exception as e:
-                print(f"Deep Link Error: {e}")
-
-    # 2. الكود العادي (إذا فتح البوت بدون رابط أو ضغط /start عادية)
-    await sync_all_users()
-    user = USER_CACHE.get(user_id)
-
-    if user:
-        await update.message.reply_text(
-            f"👋 أهلاً بك مجدداً يا {user['name']}", 
-            reply_markup=get_main_kb(user['role'], user['is_verified'])
-        )
+    if role == "rider":
+        # تسجيل الراكب فوراً
+        first_name = user.first_name if user.first_name else "راكب"
+        last_name = user.last_name if user.last_name else ""
+        full_name = f"{first_name} {last_name}".strip()
+        
+        context.user_data['reg_phone'] = "0000000000" 
+        
+        await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
+        await complete_registration(update, context, full_name)
+        
     else:
-        # عرض خيارات التسجيل اليدوي للمستخدمين الجدد
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
-             InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
-        ])
-        await update.message.reply_text("👋 مرحباً بك! يرجى اختيار نوع الحساب للبدء:", reply_markup=kb)
+        # تسجيل الكابتن (يحتاج خطوات إضافية)
+        context.user_data['state'] = 'WAIT_NAME'
+        msg = f"✅ اخترت: **كابتن (سائق)**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن للتوثيق:"
+        await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
 
-
+           
 async def complete_registration(update, context, name):
     user = update.effective_user
     user_id = user.id
