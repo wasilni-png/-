@@ -409,35 +409,82 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
             return
 
+        # حالة طلب مشوار عام (عبر GPS) عند عدم وجود كابتن في الحي
+        elif arg_value == "order_general":
+            # 1. التسجيل التلقائي للراكب إذا لم يكن مسجلاً
+            await sync_all_users()
+            if user_id not in USER_CACHE:
+                conn = get_db_connection()
+                if conn:
+                    with conn.cursor() as cur:
+                        full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+                        cur.execute("""
+                            INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (user_id) DO NOTHING
+                        """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
+                        conn.commit()
+                    conn.close()
+                    await sync_all_users(force=True)
+
+            # 2. توجيه الراكب لكتابة التفاصيل فوراً (المرحلة الأولى من الطلب العام)
+            context.user_data.update({
+                'state': 'WAIT_GENERAL_DETAILS'
+            })
+
+            await update.message.reply_text(
+                "🌍 **بدء بحث عام عن أقرب كابتن (GPS)**\n\n"
+                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                "(مثال: من حي السلام إلى سوق المدينة، نحتاج سيارة واسعة)",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+
         # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
-        elif arg_value.startswith(("order_", "req_")):
+                # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
+        elif arg_value.startswith("order_"):
             try:
-                # فك تشفير الرابط (للتعامل مع الأسماء العربية)
-                decoded_args = urllib.parse.unquote(arg_value)
-                parts = decoded_args.split("_")
+                # استخراج ID الكابتن فقط (لأن الحي لم نعد نطلبه في الرابط)
+                driver_id = arg_value.split("_")[1]
 
-                if len(parts) >= 3:
-                    driver_id = parts[1]
-                    dist_name = "_".join(parts[2:]) # تجميع اسم الحي
+                # --- [جديد] التسجيل التلقائي للراكب إذا لم يكن مسجلاً ---
+                await sync_all_users()
+                if user_id not in USER_CACHE:
+                    conn = get_db_connection()
+                    if conn:
+                        with conn.cursor() as cur:
+                            full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+                            cur.execute("""
+                                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (user_id) DO NOTHING
+                            """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
+                            conn.commit()
+                        conn.close()
+                        await sync_all_users(force=True) # تحديث الذاكرة فوراً
 
-                    context.user_data.update({
-                        'driver_to_order': driver_id,
-                        'order_dist': dist_name,
-                        'state': 'WAIT_TRIP_DETAILS'
-                    })
+                # --- [جديد] التحويل المباشر لطلب التفاصيل ---
+                context.user_data.update({
+                    'driver_to_order': driver_id,
+                    'state': 'WAIT_TRIP_DETAILS'
+                })
 
-                    await update.message.reply_text(
-                        f"📍 **طلب مشوار جديد**\n"
-                        f"وجهتك المختارة: **{dist_name}**\n"
-                        "─────────────────\n"
-                        "📝 **اكتب تفاصيل مشوارك الآن:**\n"
-                        "(مثال: من العالية مول إلى الحرم، عددنا 3 أشخاص)",
-                        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    return 
+                await update.message.reply_text(
+                    f"👋 أهلاً بك يا {first_name}\n"
+                    "لقد اخترت كابتن من القروب.\n\n"
+                    "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                    "(مثال: من الراشد مول إلى الحرم، الوقت 9 مساءً)",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return 
+
             except Exception as e:
                 print(f"Deep Link Error: {e}")
+                await update.message.reply_text("⚠️ حدث خطأ في الرابط، يرجى المحاولة من القروب مجدداً.")
+                return
 
     # ب) المسار العادي (بدون روابط) - فحص قاعدة البيانات
     await sync_all_users() # تأكد أن هذه الدالة موجودة لديك
@@ -803,6 +850,31 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ أرقام فقط.")
         return
 
+    # إذا كانت الحالة انتظار السعر لطلب "كابتن محدد"
+    if state == 'WAIT_TRIP_PRICE':
+        if text.isdigit():
+            price = text
+            details = context.user_data.get('trip_details')
+            driver_id = context.user_data.get('driver_to_order')
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ قبول", callback_data=f"accept_ride_{user_id}_{price}"),
+                 InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{user_id}")]
+            ])
+            
+            # إرسال للكابتن
+            await context.bot.send_message(
+                chat_id=driver_id,
+                text=f"🚨 **طلب مشوار خاص!**\n\n👤 العميل: {update.effective_user.first_name}\n📝 التفاصيل: {details}\n💰 السعر: {price} ريال",
+                reply_markup=kb
+            )
+            await update.message.reply_text("✅ تم إرسال طلبك للكابتن، انتظر الموافقة.")
+            context.user_data['state'] = None
+        else:
+            await update.message.reply_text("⚠️ أرقام فقط للسعر.")
+        return
+
+
     # --- 5. القائمة الرئيسية ---
     # 5. أوامر القائمة الرئيسية (Main Menu
     if text == "🚖 طلب رحلة":
@@ -1096,16 +1168,23 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "يرجى كتابة **تفاصيل المشوار** (من وين لوين؟):",
                 parse_mode=ParseMode.MARKDOWN
             )
-        else:
-            # المستخدم في مجموعة -> تحويل للبوت
-            bot_username = context.bot.username
-            url = f"https://t.me/{bot_username}?start=req_{driver_id}"
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ اضغط هنا لإكمال الطلب", url=url)]])
-            await query.edit_message_text(
-                "📥 لإكمال الطلب وحماية خصوصيتك، انتقل للبوت:",
-                reply_markup=kb
-            )
-        return
+            else:
+        # هذا الجزء يعمل عندما يضغط العضو على زر كابتن داخل "القروب"
+        bot_username = context.bot.username
+        # نستخدم order_ لضمان تفعيل حالة WAIT_TRIP_DETAILS فور الضغط على "ابدأ"
+        url = f"https://t.me/{bot_username}?start=order_{driver_id}"
+        
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🚀 إرسال تفاصيل المشوار", url=url)
+        ]])
+        
+        await query.edit_message_text(
+            "📥 **خطوة واحدة متبقية!**\n\nانتقل إلى البوت الخاص بنا الآن لكتابة تفاصيل مشوارك وتحديد السعر مع الكابتن مباشرة بشكل خاص وآمن.",
+            reply_markup=kb,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    return
+
 
     # --- منطق تبديل الأحياء ---
         # --- 1. معالجة الضغط على اسم الحي (تبديل الحالة) ---
@@ -1580,14 +1659,16 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
     if matched_drivers:
         keyboard = []
-        for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
-            driver_id = d['user_id']
-            # رابط Deep Link يفتح البوت ويبدأ الطلب
-            deep_link = f"https://t.me/Fogtyjnbot?start=req_{driver_id}"
+        for d in matched_drivers[:6]:
+    driver_id = d['user_id']
+    # الرابط يحتوي فقط على كلمة order_ متبوعة بـ ID الكابتن
+    deep_link = f"https://t.me/{context.bot.username}?start=order_{driver_id}"
+    
+    keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
+
             
             # تصحيح السطر أدناه: إضافة اسم الكابتن وإغلاق علامات التنصيص والقوس
-            keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=deep_link)])
-
+            
         await update.message.reply_text(
             f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n\n"
             "اضغط على اسم الكابتن ثم اضغط (ابدأ/Start) واكتب تفاصيل مشوارك داخل البوت:",
