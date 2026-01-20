@@ -395,6 +395,54 @@ async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode=ParseMode.MARKDOWN
             )
 
+async def welcome_on_first_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # نتحقق أن الرسالة من جروب وليست خاص
+    if not update.effective_chat or update.effective_chat.type == "private":
+        return
+
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    # فحص هل تم الترحيب بالعضو مسبقاً في هذه الجلسة؟ 
+    # (نستخدم context.user_data لضمان عدم تكرار الرسالة لكل رسالة يكتبها)
+    if context.user_data.get('welcomed'):
+        return
+
+    # إعداد الروابط والأزرار
+    bot_username = context.bot.username
+    url_rider = f"https://t.me/{bot_username}?start=reg_rider"
+    url_driver = f"https://t.me/{bot_username}?start=reg_driver"
+    video_url = "https://t.me/mishwarii/4436" # رابط الفيديو الخاص بك
+
+    welcome_text = (
+        f"🚀 **أهلاً بك يا {user_name} في منصة مشواري!**\n\n"
+        "يبدو أنك جديد هنا، المنصة الأسهل لربط الكباتن بالركاب.\n"
+        "👇 **اختر دورك الآن للبدء:**"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👤 دخول كراكب", url=url_rider),
+            InlineKeyboardButton("🚗 دخول ككابتن", url=url_driver)
+        ],
+        [InlineKeyboardButton("📜 قناة التعليمات", url="https://t.me/mishwarii")]
+    ])
+
+    try:
+        # إرسال الترحيب كرد (Reply) على رسالته الأولى
+        await update.message.reply_video(
+            video=video_url,
+            caption=welcome_text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        # تسجيل أنه تم الترحيب به حتى لا يزعجه البوت مرة أخرى
+        context.user_data['welcomed'] = True
+        
+    except Exception as e:
+        print(f"Error in welcoming: {e}")
+
+
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2153,6 +2201,13 @@ def main():
         filters.ChatType.PRIVATE & filters.REPLY & filters.User(ADMIN_IDS), 
         admin_reply_handler
     ), group=1)
+    # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
+application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=1)
+
+    
+    
+    
+    
 
     # ---------------------------------------------------------
     # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
@@ -2184,3 +2239,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
