@@ -602,14 +602,7 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     # --- 1. قسم إدارة المدن والأحياء ---
-    if data.startswith("selectcity_"):
-        city_name = data.split("_")[1]
-        await show_districts_by_city(update, context, city_name)
-        return # ضروري جداً للتوقف هنا
-
-    elif data == "back_to_cities":
-        await districts_settings_view(update, context)
-        return
+    
 
     # --- 2. قسم تسجيل الحساب الجديد (راكب/سائق) ---
     if data in ["reg_rider", "reg_driver"]:
@@ -1131,6 +1124,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     user_id = update.effective_user.id
+ 
+    # إذا كانت البيانات تخص اختيار مدينة أو حي، اتركها لـ register_callback أو عالجها هنا
+    if data.startswith("selectcity_") or data == "back_to_cities":
+        return # السماح للدالة الأخرى بالمعالجة أو تأكد من توحيدهم
+    
 
     # محاولة إغلاق مؤشر التحميل لتجنب التعليق
     try:
