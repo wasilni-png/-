@@ -595,44 +595,46 @@ async def auto_register_rider(update):
 # --- التسجيل ---
 # --- التسجيل المحدث ---
 
-async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
     await query.answer()
     data = query.data
-# عند اختيار مدينة
-    if query.data.startswith("selectcity_"):
-    city_name = query.data.split("_")[1]
-    await show_districts_by_city(update, context, city_name)
 
-# عند طلب العودة للمدن
-    elif query.data == "back_to_cities":
-    await districts_settings_view(update, context)
+    # --- 1. قسم إدارة المدن والأحياء ---
+    if data.startswith("selectcity_"):
+        city_name = data.split("_")[1]
+        await show_districts_by_city(update, context, city_name)
+        return # ضروري جداً للتوقف هنا
 
+    elif data == "back_to_cities":
+        await districts_settings_view(update, context)
+        return
 
+    # --- 2. قسم تسجيل الحساب الجديد (راكب/سائق) ---
+    if data in ["reg_rider", "reg_driver"]:
+        role = "rider" if data == "reg_rider" else "driver"
+        context.user_data['reg_role'] = role
 
-    # تحديد الدور بناءً على الزر المضغوط
-    role = "rider" if query.data == "reg_rider" else "driver"
-    context.user_data['reg_role'] = role
-
-    if role == "rider":
-        # تسجيل الراكب فوراً
-        first_name = user.first_name if user.first_name else "راكب"
-        last_name = user.last_name if user.last_name else ""
-        full_name = f"{first_name} {last_name}".strip()
+        if role == "rider":
+            # تسجيل الراكب فوراً
+            first_name = user.first_name or "راكب"
+            last_name = user.last_name or ""
+            full_name = f"{first_name} {last_name}".strip()
+            
+            context.user_data['reg_phone'] = "0000000000" 
+            
+            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
+            await complete_registration(update, context, full_name)
         
-        context.user_data['reg_phone'] = "0000000000" 
+        elif role == "driver":
+            # تسجيل الكابتن (يحتاج خطوات إضافية)
+            context.user_data['state'] = 'WAIT_NAME'
+            msg = f"✅ اخترت: **كابتن (سائق)**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن للتوثيق:"
+            await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
         
-        await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-        await complete_registration(update, context, full_name)
-        
-    else:
-        # تسجيل الكابتن (يحتاج خطوات إضافية)
-        context.user_data['state'] = 'WAIT_NAME'
-        msg = f"✅ اخترت: **كابتن (سائق)**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن للتوثيق:"
-        await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
-
-           
+        return # إنهاء المعالجة بعد التسجيل
+     
 async def complete_registration(update, context, name):
     user = update.effective_user
     user_id = user.id
