@@ -1411,9 +1411,12 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
 
     # --- تم اختيار المدينة -> عرض الأحياء ---
-    elif data.startswith("city_"):
-        city_name = data.split("_")[1]
-        districts = CITIES_DISTRICTS.get(city_name, [])
+    if data.startswith("selectcity_"):
+        # جلب الكلمة الأخيرة دائماً لضمان أنها اسم المدينة
+        city_name = data.split("_")[-1] 
+        await show_districts_by_city(update, context, city_name)
+        return
+
         
         # تنسيق الأزرار (2 في كل صف)
         keyboard = []
@@ -1940,20 +1943,23 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         if found_dist: break # إذا وجد الحي في مدينة معينة يتوقف عن البحث في باقي المدن
 
     # 4. إذا لم يجد اسم الحي -> يعرض أزرار المدن أولاً (لأن القائمة أصبحت كبيرة)
+        # 4. إذا لم يجد اسم الحي -> يعرض أزرار المدن
     if not found_dist:
         keyboard = []
         cities = list(CITIES_DISTRICTS.keys())
         for i in range(0, len(cities), 2):
-            row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_search_{cities[i]}")]
+            # تم تعديل الكال باك ليكون مباشر ليفهمه المعالج
+            row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_{cities[i]}")]
             if i + 1 < len(cities):
-                row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_search_{cities[i+1]}"))
+                row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_{cities[i+1]}"))
             keyboard.append(row)
-        
+
         await update.message.reply_text(
-            f"يا هلا بك يا {user.first_name} ✨\nيرجى اختيار مدينتك أولاً لتحديد الحي والعثور على كباتن:",
+            f"يا هلا بك يا {user.first_name} ✨\nيرجى اختيار مدينتك أولاً لتحديد الحي:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
+
 
     # 5. إذا وجد الحي -> يبحث عن الكباتن المسجلين في هذا الحي
     await sync_all_users()
@@ -2225,6 +2231,8 @@ def main():
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome), group=0)
+    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=0)
+
 
 
     # ---------------------------------------------------------
@@ -2235,8 +2243,7 @@ def main():
         admin_reply_handler
     ), group=1)
     # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
-    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=1)
-
+    
     
     
     
