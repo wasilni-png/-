@@ -1695,25 +1695,32 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # 3. محاولة استخراج الحي من نص الرسالة
-    districts_list = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        # 1. البحث في جميع المدن والأحياء بدلاً من مدينة واحدة
     found_dist = None
-    for dist in districts_list:
-        clean_dist = dist.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
-        if clean_dist in msg_clean:
-            found_dist = dist
-            break
+    target_city = None # سنستخدم هذا لنعرف الحي تابع لأي مدينة
 
-    # 4. إذا لم يجد اسم الحي -> يعرض أزرار الأحياء للاختيار (مثل آلية الخاص)
+    for city_name, districts_list in CITIES_DISTRICTS.items():
+        for dist in districts_list:
+            # تنظيف اسم الحي للبحث (تحويل التاء المربوطة والهمزات)
+            clean_dist = dist.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+            if clean_dist in msg_clean:
+                found_dist = dist
+                target_city = city_name
+                break
+        if found_dist: break # إذا وجد الحي في مدينة معينة يتوقف عن البحث في باقي المدن
+
+    # 4. إذا لم يجد اسم الحي -> يعرض أزرار المدن أولاً (لأن القائمة أصبحت كبيرة)
     if not found_dist:
         keyboard = []
-        for i in range(0, len(districts_list), 2):
-            row = [InlineKeyboardButton(districts_list[i], callback_data=f"search_dist_{districts_list[i]}")]
-            if i + 1 < len(districts_list):
-                row.append(InlineKeyboardButton(districts_list[i+1], callback_data=f"search_dist_{districts_list[i+1]}"))
+        cities = list(CITIES_DISTRICTS.keys())
+        for i in range(0, len(cities), 2):
+            row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_search_{cities[i]}")]
+            if i + 1 < len(cities):
+                row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_search_{cities[i+1]}"))
             keyboard.append(row)
         
         await update.message.reply_text(
-            f"يا هلا بك يا {user.first_name} ✨\nحدد الحي المطلوب للبحث عن كباتن متوفرين:",
+            f"يا هلا بك يا {user.first_name} ✨\nيرجى اختيار مدينتك أولاً لتحديد الحي والعثور على كباتن:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
@@ -1721,54 +1728,50 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 5. إذا وجد الحي -> يبحث عن الكباتن المسجلين في هذا الحي
     await sync_all_users()
     matched_drivers = []
+    
+    # تحويل اسم الحي المكتشف لصيغة المقارنة (تنظيف التاء المربوطة)
+    clean_found_dist = found_dist.replace("ة", "ه")
+
     for d in CACHED_DRIVERS:
         if d.get('districts'):
-            # تنظيف قائمة أحياء الكابتن للمطابقة
+            # تنظيف قائمة أحياء الكابتن المخزنة في قاعدة البيانات للمطابقة
             d_dists = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
-            if found_dist.replace("ة", "ه") in d_dists:
+            if clean_found_dist in d_dists:
                 matched_drivers.append(d)
 
-       # 6. عرض النتائج بنفس آلية "أزرار الأحياء" الاحترافية
+    # 6. عرض النتائج
     if matched_drivers:
         keyboard = []
         for d in matched_drivers[:6]:
             driver_id = d['user_id']
             driver_name = d['name']
-            
-            # الرابط المختصر الذي سينقل الراكب للبوت ويسجله تلقائياً
             deep_link = f"https://t.me/{context.bot.username}?start=order_{driver_id}"
-            
-            # إضافة زر لكل كابتن في القائمة
             keyboard.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {driver_name}", url=deep_link)])
 
-        # إرسال الرسالة النهائية للقروب مع أزرار الكباتن
         await update.message.reply_text(
-            f"✅ **أبشر! وجدنا كباتن متاحين في حي {found_dist}:**\n\n"
-            "إليك قائمة الكباتن المتاحين الآن. اضغط على الكابتن المناسب لك لإرسال تفاصيل مشوارك له مباشرة:",
+            f"✅ **أبشر! وجدنا كباتن متاحين في {found_dist} ({target_city}):**\n\n"
+            "اضغط على الكابتن المناسب لك لإرسال تفاصيل مشوارك له مباشرة:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
 
-        
-        # 7. تنبيه الكباتن في الخاص فوراً لزيادة سرعة الاستجابة
+        # 7. تنبيه الكباتن
         for d in matched_drivers:
             try:
                 await context.bot.send_message(
                     chat_id=d['user_id'],
-                    text=f"🔔 **تنبيه:** يوجد  **{found_dist}**  هناك طلبات قريبه منك. كن مستعداً!"
+                    text=f"🔔 **تنبيه:** يوجد طلب جديد في حي **{found_dist}** بمدينة **{target_city}**. كن مستعداً!"
                 )
             except: pass
     else:
-        # إذا لم يتوفر كباتن في الحي المحدد
+        # كود عدم توفر كباتن (يبقى كما هو مع إضافة اسم المدينة)
         bot_username = context.bot.username
-        # رابط ينقل العميل للبوت ويحفز خيار البحث بالموقع
         search_link = f"https://t.me/{bot_username}?start=order_general"
-        
         keyboard = [[InlineKeyboardButton("🌍 ابحث عن أقرب كابتن (GPS)", url=search_link)]]
         
         await update.message.reply_text(
-            f"📍 حي {found_dist}: لا يوجد كباتن مسجلين بهذا الحي حالياً.\n\n"
-            "💡 **بدلاً من ذلك:** يمكنك البحث عن أقرب كابتن متاح حولك الآن بواسطة موقعك الجغرافي عبر البوت.",
+            f"📍 حي {found_dist} ({target_city}): لا يوجد كباتن مسجلين بهذا الحي حالياً.\n\n"
+            "💡 يمكنك البحث عن أقرب كابتن متاح حولك الآن بواسطة GPS:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
