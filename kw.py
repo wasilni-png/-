@@ -196,6 +196,20 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
         conn.close()
 
 
+def clean_text(text):
+    if not text: return ""
+    # إزالة الكلمات الشائعة التي تسبب خللاً في البحث
+    common_words = ["حي", "حديقة", "مخطط", "شارع", "منطقة", "قرب"]
+    text = text.lower()
+    for word in common_words:
+        text = text.replace(word, "")
+    
+    # إزالة "ال" التعريف والمسافات الزائدة
+    text = re.sub(r'^ال', '', text) 
+    text = text.replace(" ال", " ")
+    return text.strip()
+
+
 
 
 # ==================== 🛠️ 3. دوال مساعدة ====================
@@ -1869,7 +1883,26 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # تجاهل الرسائل التي لا تحتوي على نص أو ليست في مجموعة
+    user_msg = update.message.text
+    
+    # تنظيف نص الرسالة القادمة من القروب
+    cleaned_msg = clean_text(user_msg)
+    
+    found_drivers = []
+    for user_id, data in USER_CACHE.items():
+        if data.get('role') == 'driver':
+            # تنظيف قائمة أحياء السائق (مثلاً: العزيزية، المطار...)
+            driver_districts = data.get('district', '').split('،') 
+            
+            for d in driver_districts:
+                cleaned_driver_district = clean_text(d)
+                
+                # البحث الذكي: هل الكلمة الأساسية للحي موجودة في رسالة الراكب؟
+                if cleaned_driver_district in cleaned_msg or cleaned_msg in cleaned_driver_district:
+                    if len(cleaned_driver_district) > 2: # لتجنب الكلمات القصيرة جداً
+                        found_drivers.append(data)
+                        break
+
     if not update.message or not update.message.text: return
     if update.message.chat.type == "private": return
 
@@ -2202,7 +2235,7 @@ def main():
         admin_reply_handler
     ), group=1)
     # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
-application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=1)
+    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=1)
 
     
     
