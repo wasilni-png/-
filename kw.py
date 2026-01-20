@@ -1537,6 +1537,9 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     user_id = update.effective_user.id
     
+    # حفظ المدينة الحالية في ذاكرة المستخدم المؤقتة ليعرف البوت أين هو عند التحديث
+    context.user_data['current_managing_city'] = city_name
+
     # 1. جلب أحياء المستخدم الحالية من القاعدة
     conn = get_db_connection()
     current_districts = []
@@ -1545,20 +1548,24 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
             cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
             res = cur.fetchone()
             if res and res[0]:
+                # تنظيف النص وتحويله لقائمة
                 current_districts = [d.strip() for d in res[0].replace("،", ",").split(",") if d.strip()]
         conn.close()
 
-    # 2. جلب أحياء المدينة المختارة بدلاً من "المدينة المنورة" فقط
+    # 2. جلب أحياء المدينة المختارة
     all_districts = CITIES_DISTRICTS.get(city_name, [])
+    if not all_districts:
+        await query.answer(f"⚠️ لا توجد أحياء مسجلة لمدينة {city_name}")
+        return
+
     keyboard = []
-    
     for i in range(0, len(all_districts), 2):
         row = []
         for j in range(2):
             if i + j < len(all_districts):
                 dist_name = all_districts[i + j]
+                # إضافة علامة الصح إذا كان الحي مختاراً مسبقاً
                 status = "✅ " if dist_name in current_districts else "⬜ "
-                # نرسل اسم الحي مع المدينة في callback_data لضمان الدقة
                 row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
         keyboard.append(row)
     
@@ -1567,7 +1574,12 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
 
     text = f"🏙 **أحياء {city_name}:**\nاختر الأحياء التي تغطيها وسيقوم البوت بتنبيهك عند وجود طلب فيها."
     
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    # استخدام edit_message_text لتحديث القائمة في نفس الرسالة دون إرسال رسائل جديدة
+    try:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        # في حال كانت الرسالة هي نفسها (لم يتغير شيء) لتجنب خطأ Telegram المزعج
+        pass
 
 # --- أوامر الأدمن ---
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
