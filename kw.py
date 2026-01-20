@@ -595,7 +595,7 @@ async def auto_register_rider(update):
 # --- التسجيل ---
 # --- التسجيل المحدث ---
 
- async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
     await query.answer()
