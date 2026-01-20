@@ -599,6 +599,17 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
     await query.answer()
+    data = query.data
+# عند اختيار مدينة
+    if query.data.startswith("selectcity_"):
+    city_name = query.data.split("_")[1]
+    await show_districts_by_city(update, context, city_name)
+
+# عند طلب العودة للمدن
+    elif query.data == "back_to_cities":
+    await districts_settings_view(update, context)
+
+
 
     # تحديد الدور بناءً على الزر المضغوط
     role = "rider" if query.data == "reg_rider" else "driver"
