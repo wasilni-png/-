@@ -779,7 +779,7 @@ async def complete_registration(update, context, name):
 
 async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ كابتن نخبة (بحث بالحي)", callback_data="order_by_districts")],
+        [InlineKeyboardButton("⭐ كابتن نخبة (بحث بالحي)", callback_data="order_by_district")],
         [InlineKeyboardButton("🌍 أقرب كابتن (بحث بالموقع)", callback_data="order_general")]
     ])
     await update.message.reply_text("🚖 **كيف تود البحث عن الكابتن؟**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -1436,38 +1436,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- تم اختيار الحي -> عرض الكباتن ---
-    elif data.startswith("search_dist_"):
-        selected_dist = data.split("_")[2]
-        await sync_all_users() # تحديث البيانات
-
-        matched_drivers = []
-        # البحث مع معالجة التاء المربوطة والهاء
-        for d in CACHED_DRIVERS:
-            if d.get('districts'):
-                d_list = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
-                if selected_dist.replace("ة", "ه") in d_list:
-                    matched_drivers.append(d)
-
-        if not matched_drivers:
-            await query.edit_message_text(
-                f"📍 حي {selected_dist}:\n\n⚠️ للأسف، لا يوجد كباتن مسجلين في هذا الحي حالياً.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data=f"city_الرياض")]]) # مثال
-            )
-        else:
-            keyboard = []
-            for d in matched_drivers[:8]: # عرض أول 8 فقط
-                # الزر يرسل book_ID_DISTRICT
-                keyboard.append([InlineKeyboardButton(
-                    f"🚖 {d['name']} ({d.get('car_info', 'سيارة')})", 
-                    callback_data=f"book_{d['user_id']}_{selected_dist}"
-                )])
-            
-            await query.edit_message_text(
-                f"✅ **كباتن متوفرين في {selected_dist}:**\nاضغط على الكابتن لطلب مشوار:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        return
+    
 
     # ===============================================================
     # 3. بدء عملية حجز كابتن محدد (Book)
@@ -1895,7 +1864,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     for user_id, data in USER_CACHE.items():
         if data.get('role') == 'driver':
             # تنظيف قائمة أحياء السائق (مثلاً: العزيزية، المطار...)
-            driver_districts = data.get('district', '').split('،') 
+            driver_districts = data.get('districts', '').split('،') 
             
             for d in driver_districts:
                 cleaned_driver_district = clean_text(d)
@@ -2279,5 +2248,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 
