@@ -584,6 +584,51 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
         )
 
+    # --- [5] قسم قبول الرحلات (للسائق) ---
+    elif data.startswith("accept_gen_"):
+        # استخراج البيانات: accept_gen_RIDERID_PRICE
+        parts = data.split("_")
+        rider_id = int(parts[2])
+        price = parts[3]
+        driver_id = query.from_user.id
+
+        # 1. التحقق من أن الرحلة لم يقبلها سائق آخر (اختياري حسب قاعدة بياناتك)
+        # 2. جلب بيانات الكابتن والراكب
+        await sync_all_users()
+        driver_info = USER_CACHE.get(driver_id)
+        rider_info = USER_CACHE.get(rider_id)
+
+        if not rider_info:
+            await query.edit_message_text("⚠️ عذراً، هذا الطلب لم يعد متاحاً.")
+            return
+
+        # 3. إنشاء جلسة دردشة بين السائق والراكب
+        start_chat_session(driver_id, rider_id)
+
+        # 4. تحديث رسالة السائق (إخفاء أزرار القبول)
+        await query.edit_message_text(
+            f"✅ **تم قبول الرحلة بنجاح!**\n\n👤 الراكب: {rider_info['name']}\n💰 السعر المتفق عليه: {price} ريال\n\n💬 يمكنك الآن التحدث مع الراكب مباشرة هنا.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        # 5. إشعار الراكب بقبول الرحلة
+        try:
+            # كيبورد لإنهاء المحادثة
+            end_kb = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
+            
+            await context.bot.send_message(
+                chat_id=rider_id,
+                text=(f"✅ **أبشر! الكابتن {driver_info['name']} قبل طلبك.**\n"
+                      f"🚗 السيارة: {driver_info.get('car_info', 'غير مسجلة')}\n"
+                      f"💰 السعر: {price} ريال\n\n"
+                      "💬 يمكنك الآن مراسلته مباشرة من هنا:"),
+                reply_markup=end_kb,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            print(f"Error notifying rider: {e}")
+
+
     # ب- معالجة اختيار حي معين والبحث عن كباتن
     elif data.startswith("searchdist_"):
         target_dist = data.split("_")[1]
