@@ -1984,6 +1984,26 @@ async def show_districts_to_driver(update: Update, context: ContextTypes.DEFAULT
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
+async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    if not districts: return
+
+    keyboard = []
+    # توزيع الأحياء في صفوف (3 أحياء في كل صف لتوفير المساحة في القروب)
+    for i in range(0, len(districts), 3):
+        row = [InlineKeyboardButton(districts[i], url=f"https://t.me/{context.bot.username}?start=sd_{i}")]
+        if i + 1 < len(districts):
+            row.append(InlineKeyboardButton(districts[i+1], url=f"https://t.me/{context.bot.username}?start=sd_{i+1}"))
+        if i + 2 < len(districts):
+            row.append(InlineKeyboardButton(districts[i+2], url=f"https://t.me/{context.bot.username}?start=sd_{i+2}"))
+        keyboard.append(row)
+
+    await update.message.reply_text(
+        "📍 **أحياء المدينة المنورة المتاحة:**\nإضغط على الحي لعرض الكباتن المتوفرين والطلب مباشرة عبر الخاص 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
 
 
 
@@ -2028,7 +2048,10 @@ def main():
 
     # 2. أزرار القائمة الرئيسية (نصوص محددة) - Group 0
     # أضف السطر هنا
-        application.add_handler(MessageHandler(filters.Regex("^📝 تحديث الأحياء$"), show_districts_to_driver), group=0)
+    application.add_handler(MessageHandler(filters.Regex("^📝 تحديث الأحياء$"), show_districts_to_driver), group=0)
+# أضف هذا السطر لمراقبة كلمة "احياء" في المجموعات
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.Regex("^(احياء|الأحياء|الأحياء المتاحة)$"), group_districts_handler), group=0)
+
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
     
