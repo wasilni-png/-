@@ -556,6 +556,25 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
 
+    # عند ضغط السائق على "حفظ وإنهاء"
+    elif data == "driver_home":
+        await sync_all_users(force=True) # تحديث الذاكرة لضمان حفظ التعديلات
+        user_info = USER_CACHE.get(user_id, {})
+        
+        # العودة للقائمة الرئيسية للسائق (إخفاء قائمة الأحياء)
+        # نقوم بمسح الرسالة الحالية وإرسال رسالة نجاح
+        try:
+            await query.delete_message() # مسح قائمة الأحياء الطويلة
+        except:
+            pass # لتجنب الخطأ إذا كانت الرسالة قديمة جداً
+            
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="✅ **تم حفظ مناطق عملك بنجاح!**\nسيتم الآن ظهور اسمك للركاب عند بحثهم في هذه الأحياء.",
+            reply_markup=get_main_kb('driver', user_info.get('is_verified', True)),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
     # ب- معالجة اختيار حي معين والبحث عن كباتن
     elif data.startswith("searchdist_"):
         target_dist = data.split("_")[1]
