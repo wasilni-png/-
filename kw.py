@@ -1280,30 +1280,27 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
 
-    # داخل handle_callbacks ابحث عن قسم order_by_district واستبدله:
+    # --- قسم الراكب: عرض الأحياء ---
     elif data == "order_by_district":
-    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-    keyboard = []
-    for i in range(0, len(districts), 2):
-        row = []
-        # نستخدم searchdist_ كبادئة لأن المعالج يبحث عنها
-        dist1 = districts[i]
-        row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_المدينة المنورة_{dist1}"))
-        if i + 1 < len(districts):
-            dist2 = districts[i+1]
-            row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_المدينة المنورة_{dist2}"))
-        keyboard.append(row)
+        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        keyboard = []
+        for i in range(0, len(districts), 2):
+            row = []
+            dist1 = districts[i]
+            row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_المدينة_المنورة_{dist1}"))
+            if i + 1 < len(districts):
+                dist2 = districts[i+1]
+                row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_المدينة_المنورة_{dist2}"))
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="main_menu")])
+        await query.edit_message_text(
+            "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
 
-    await query.edit_message_text(
-        "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    return
-
-
-
-    
 
     elif data.startswith("searchdist_"):
         # تنفيذ البحث
