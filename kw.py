@@ -557,22 +557,31 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # عند ضغط السائق على "حفظ وإنهاء"
+        # عند ضغط السائق على "حفظ وإنهاء"
     elif data == "driver_home":
-        await sync_all_users(force=True) # تحديث الذاكرة لضمان حفظ التعديلات
+        # 1. جلب بيانات السائق الحالية لعرض الأحياء التي تم حفظها (اختياري للتوثيق)
         user_info = USER_CACHE.get(user_id, {})
+        saved_dists = user_info.get('districts', "لا توجد أحياء مختارة")
+        if not saved_dists: saved_dists = "لا توجد أحياء مختارة"
         
-        # العودة للقائمة الرئيسية للسائق (إخفاء قائمة الأحياء)
-        # نقوم بمسح الرسالة الحالية وإرسال رسالة نجاح
-        try:
-            await query.delete_message() # مسح قائمة الأحياء الطويلة
-        except:
-            pass # لتجنب الخطأ إذا كانت الرسالة قديمة جداً
-            
+        # 2. تحويل الرسالة من "قائمة أزرار" إلى "نص تأكيدي" فقط (ستختفي الأزرار هنا)
+        confirm_text = (
+            "✅ **تم حفظ الأحياء بنجاح!**\n\n"
+            f"📍 نطاق عملك الحالي:\n_{saved_dists}_\n\n"
+            "يمكنك الآن استقبال الطلبات من الركاب في هذه المناطق."
+        )
+        
+        await query.edit_message_text(
+            text=confirm_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=None  # هذا السطر هو المسؤول عن إخفاء قائمة الأزرار تماماً
+        )
+
+        # 3. إرسال الكيبورد الرئيسي للسائق في رسالة جديدة لكي يتمكن من إكمال استخدامه للبوت
         await context.bot.send_message(
             chat_id=user_id,
-            text="✅ **تم حفظ مناطق عملك بنجاح!**\nسيتم الآن ظهور اسمك للركاب عند بحثهم في هذه الأحياء.",
-            reply_markup=get_main_kb('driver', user_info.get('is_verified', True)),
-            parse_mode=ParseMode.MARKDOWN
+            text="الآن، يمكنك العودة لمهامك من القائمة أدناه:",
+            reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
         )
 
     # ب- معالجة اختيار حي معين والبحث عن كباتن
@@ -624,31 +633,26 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("toggle_"):
         dist_name = data.split("_")[1]
         
-        # 1. جلب بيانات السائق الحالية من الكاش
-        await sync_all_users()
+        # 1. جلب البيانات من الكاش المحلي (سريع جداً)
         user_info = USER_CACHE.get(user_id, {})
         current_str = user_info.get('districts', "") or ""
         
-        # تحويل النص إلى قائمة لتسهيل الإضافة والحذف
+        # تحويل النص إلى قائمة
         current_list = [x.strip() for x in current_str.replace("،", ",").split(",") if x.strip()]
         
-        # 2. تبديل الحالة
+        # 2. التبديل الفوري في الذاكرة (UI Logic)
         if dist_name in current_list:
             current_list.remove(dist_name)
-            msg = f"❌ تم إزالة حي {dist_name}"
+            alert_msg = f"❌ تم إزالة {dist_name}"
         else:
             current_list.append(dist_name)
-            msg = f"✅ تم إضافة حي {dist_name}"
+            alert_msg = f"✅ تم إضافة {dist_name}"
         
-        # 3. حفظ السلسلة الجديدة في قاعدة البيانات
+        # 3. تحديث الكاش المحلي فوراً (قبل قاعدة البيانات لضمان السرعة)
         new_districts_str = ",".join(current_list)
-        update_districts_in_db(user_id, new_districts_str) # تأكد أن هذه الدالة موجودة لديك
-        
-        # 4. تحديث الكاش فوراً لضمان ظهور التعديل
-        await sync_all_users(force=True)
-        await query.answer(msg)
+        USER_CACHE[user_id]['districts'] = new_districts_str
 
-        # 5. إعادة بناء الكيبورد لتحديث العلامات ✅ و ❌ أمام السائق فوراً
+        # 4. تحديث شكل الأزرار فوراً للمستخدم
         districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
         keyboard = []
         for i in range(0, len(districts), 2):
@@ -659,8 +663,14 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
         
-        # تعديل الأزرار فقط دون إعادة إرسال الرسالة
+        # تحديث الأزرار فقط (أسرع من edit_message_text)
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # إرسال تنبيه صغير يختفي بسرعة
+        await query.answer(alert_msg)
+
+        # 5. التحديث في الخلفية (Database Sync) - لا يعطل واجهة المستخدم
+        update_districts_in_db(user_id, new_districts_str)
 
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
