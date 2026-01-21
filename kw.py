@@ -1154,12 +1154,13 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
-async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str):
+async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str = "المدينة المنورة"):
     query = update.callback_query
     user_id = update.effective_user.id
     
-    # [هام] حفظ المدينة الحالية ليعرف البوت أين يعود بعد الضغط على حي
-    context.user_data['current_managing_city'] = city_name
+    # تأكيد استقبال الضغطة لمنع تعليق الزر في تيليجرام
+    try: await query.answer()
+    except: pass
 
     # 1. جلب أحياء المستخدم الحالية من القاعدة
     conn = get_db_connection()
@@ -1169,17 +1170,11 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
             cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
             res = cur.fetchone()
             if res and res[0]:
-                # تنظيف النص وتحويله لقائمة
                 current_districts = [d.strip() for d in res[0].replace("،", ",").split(",") if d.strip()]
         conn.close()
 
-    # 2. جلب أحياء المدينة المختارة
+    # 2. جلب أحياء المدينة المنورة
     all_districts = CITIES_DISTRICTS.get(city_name, [])
-    
-    if not all_districts:
-        try: await query.answer(f"⚠️ لا توجد أحياء مسجلة لمدينة {city_name}")
-        except: pass
-        return
 
     keyboard = []
     # ترتيب الأزرار: زرين في كل صف
@@ -1188,22 +1183,24 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
         for j in range(2):
             if i + j < len(all_districts):
                 dist_name = all_districts[i + j]
-                # إضافة علامة الصح إذا كان الحي مختاراً
                 status = "✅ " if dist_name in current_districts else "⬜ "
+                # نضع اسم المدينة في الـ callback لضمان معالجة صحيحة
                 row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
-        keyboard.append(row)
-    
-    # أزرار التحكم السفلية
-    keyboard.append([InlineKeyboardButton("🔙 العودة للمدن", callback_data="back_to_cities")])
-    keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="save_districts")])
 
-    text = f"🏙 **أحياء {city_name}:**\nاختر الأحياء التي تعمل بها، ثم اضغط حفظ."
+    # 3. أزرار التحكم السفلية (حذفنا العودة للمدن لأن البوت مخصص للمدينة فقط)
+    keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="main_menu")])
+
+    text = (
+        f"🏙 **إعدادات العمل في {city_name}:**\n\n"
+        "اضغط على الحي لتفعيله أو تعطيله:\n"
+        "✅ = ستصلك طلبات هذا الحي\n"
+        "⬜ = لن تصلك طلبات هذا الحي"
+    )
     
     try:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        # لتجنب الخطأ إذا ضغط المستخدم الزر ولم يتغير شيء في الرسالة
-        pass
+    except Exception as e:
+        print(f"Error in show_districts: {e}")
 
 
 # ==================== معالج الأزرار الشامل (محدث) ====================
@@ -1463,30 +1460,29 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             with conn.cursor() as cur:
-                # جلب الأحياء الحالية مباشرة من القاعدة
+                # 1. جلب الأحياء الحالية
                 cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
                 res = cur.fetchone()
                 
-                # تحويل النص إلى قائمة
                 current_list = []
                 if res and res[0]:
                     current_list = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
                 
-                # تبديل الحالة: إذا موجود احذفه، إذا مو موجود ضيفه
+                # 2. تبديل الحالة
                 if dist_name in current_list:
                     current_list.remove(dist_name)
                 else:
                     current_list.append(dist_name)
                 
-                # تحويل القائمة لنص وتحديث القاعدة
+                # 3. تحديث قاعدة البيانات
                 new_districts_str = "، ".join(current_list)
                 cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
                 conn.commit()
 
-            # 🔄 تحديث الكاش المحلي فوراً لضمان عمل البوت في القروبات بناءً على الأحياء الجديدة
+            # 🔄 تحديث الكاش المحلي فوراً (ضروري جداً لعمل القروبات)
             await sync_all_users()
 
-            # 2. إعادة بناء لوحة المفاتيح فوراً لعرض التغيير للمستخدم
+            # 4. إعادة بناء الأزرار (أحياء المدينة المنورة فقط)
             all_districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
             keyboard = []
             for i in range(0, len(all_districts), 2):
@@ -1498,10 +1494,12 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         row.append(InlineKeyboardButton(f"{status}{name}", callback_data=f"toggle_dist_{name}"))
                 keyboard.append(row)
             
-            keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="save_districts")])
+            # أزرار التحكم
+            keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="main_menu")])
             
-            # تحديث الرسالة الحالية بالأزرار الجديدة
+            # 5. تحديث الأزرار في واجهة المستخدم
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+            await query.answer(f"تم تحديث: {dist_name}")
 
         except Exception as e:
             print(f"❌ خطأ في تحديث الأحياء: {e}")
@@ -1510,14 +1508,23 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.close()
         return
 
+
     # --- 2. معالجة زر الحفظ النهائي ---
     elif data == "save_districts":
         await query.answer("✅ تم حفظ إعداداتك بنجاح")
+        
+        # أزرار إضافية للعودة أو البدء
+        keyboard = [[InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")]]
+        
         await query.edit_message_text(
-            "🚀 **تم تحديث نطاق عملك!**\n\nستصلك تنبيهات فورية في الخاص عند طلب أي مشوار في الأحياء التي اخترتها.\nشكراً لك يا كابتن.",
+            "🚀 **تم تحديث نطاق عملك في المدينة المنورة!**\n\n"
+            "نظام **نخبة المدينة** سيقوم الآن بتحويل الطلبات إليك فوراً عند توفر مشوار في أحيائك المختارة.\n\n"
+            "💡 *نصيحة:* تأكد من بقاء البوت مفعلاً لتصلك التنبيهات.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
         return
+
 
 
     # ===============================================================
