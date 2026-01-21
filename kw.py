@@ -710,24 +710,41 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
 
     return count
 
-def end_chat_session(user_id):
-    partner_id = None
-    conn = get_db_connection()
-    if conn:
-        with conn.cursor() as cur:
-            # البحث عن الشريك
-            cur.execute("SELECT user1_id, user2_id FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
-            row = cur.fetchone()
-            if row:
-                partner_id = row[1] if row[0] == user_id else row[0]
-                # حذف الجلسة
-                cur.execute("DELETE FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
-                conn.commit()
-        conn.close()
-    return partner_id
+async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 1. إنهاء الجلسة في قاعدة البيانات وجلب آيدي الطرف الآخر
+    partner_id = end_chat_session(user_id)
+    
+    # 2. تنظيف ذاكرة البوت للمستخدم الحالي
+    context.user_data.clear()
+    
+    # 3. جلب بيانات المستخدم لتحديد الكيبورد المناسب (سائق أم راكب)
+    await sync_all_users()
+    user = USER_CACHE.get(user_id)
+    role = user['role'] if user else 'rider'
+    is_v = user.get('is_verified', True) if user else True
+    
+    # 4. إرسال رسالة التأكيد والعودة للقائمة الرئيسية
+    await update.message.reply_text(
+        "🛑 تم إنهاء المحادثة والعودة للقائمة الرئيسية.",
+        reply_markup=get_main_kb(role, is_v)
+    )
 
-
-
+    # 5. إبلاغ الطرف الآخر إذا كان موجوداً
+    if partner_id:
+        try:
+            p_user = USER_CACHE.get(partner_id)
+            p_role = p_user['role'] if p_user else 'rider'
+            p_v = p_user.get('is_verified', True) if p_user else True
+            
+            await context.bot.send_message(
+                chat_id=partner_id,
+                text="🛑 قام الطرف الآخر بإنهاء المحادثة.",
+                reply_markup=get_main_kb(p_role, p_v)
+            )
+        except Exception as e:
+            print(f"Error notifying partner: {e}")
 
 # --- المعالج الشامل (Global Handler) ---
 
