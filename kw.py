@@ -2034,7 +2034,9 @@ def main():
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
     application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
-    application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"), group=0)
+    # الحل الأبسط والأفضل: إزالة الفلتر ليتم معالجة كل شيء داخل الدالة
+    application.add_handler(CallbackQueryHandler(register_callback), group=0)
+
 
 # أضف هذا داخل دالة main قبل معالجات النصوص العامة
     # أضف هذا السطر داخل دالة main
