@@ -1759,7 +1759,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             # حالة ب: كتب كلمة مجهولة -> يعرض الرسالة الترحيبية (أزرار التسجيل)
             welcome_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🚕 التسجيل ككابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
-                 InlineKeyboardButton("📱 طلب رحلة", url=f"https://t.me/{context.bot.username}?start=order")]
+                 InlineKeyboardButton("📱 طلب رحلة", url=f"https://t.me/{context.bot.username}?start=order_general")]
             ])
             await update.message.reply_text(f"مرحباً بك في **مشواري المدينة** 🌴\nلطلب مشوار أو التسجيل استخدم الأزرار:", reply_markup=welcome_kb, parse_mode=ParseMode.MARKDOWN)
         return
