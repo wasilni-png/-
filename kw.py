@@ -315,103 +315,6 @@ def get_main_kb(role, is_verified=True):
     ], resize_keyboard=True)
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
-async def send_fancy_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # التأكد من أن التحديث يحتوي على رسالة وأعضاء جدد
-    if not update.message or not update.message.new_chat_members:
-        return
-
-    chat_id = update.effective_chat.id
-    bot_username = context.bot.username
-
-    # روابط الدخول العميق (توجه المستخدم لـ start_command مع المعامل المناسب)
-    url_rider = f"https://t.me/{bot_username}?start=reg_rider"
-    url_driver = f"https://t.me/{bot_username}?start=reg_driver"
-
-    # رابط الفيديو (يفضل استخدام File ID إذا توفر، أو رابط قناة عامة)
-    video_url = "https://t.me/mishwarii/4436" 
-
-    for member in update.message.new_chat_members:
-        if member.id == context.bot.id:
-            continue # تجاهل الترحيب بالبوت نفسه
-
-        welcome_text = (
-            f"🚀 **أهلاً بك يا {member.first_name} في منصة مشواري!**\n\n"
-            "المنصة الأسهل لربط الكباتن بالركاب.\n"
-            "👇 **اختر دورك الآن للبدء فوراً:**"
-        )
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("👤 دخول كراكب", url=url_rider),
-                InlineKeyboardButton("🚗 دخول ككابتن", url=url_driver)
-            ],
-            [InlineKeyboardButton("📜 قناة التعليمات", url="https://t.me/mishwarii")]
-        ])
-
-        try:
-            # محاولة إرسال الفيديو
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=video_url,
-                caption=welcome_text,
-                reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception:
-            # البديل النصي في حال فشل الفيديو
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=welcome_text,
-                reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-async def welcome_on_first_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # نتحقق أن الرسالة من جروب وليست خاص
-    if not update.effective_chat or update.effective_chat.type == "private":
-        return
-
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
-
-    # فحص هل تم الترحيب بالعضو مسبقاً في هذه الجلسة؟ 
-    # (نستخدم context.user_data لضمان عدم تكرار الرسالة لكل رسالة يكتبها)
-    if context.user_data.get('welcomed'):
-        return
-
-    # إعداد الروابط والأزرار
-    bot_username = context.bot.username
-    url_rider = f"https://t.me/{bot_username}?start=reg_rider"
-    url_driver = f"https://t.me/{bot_username}?start=reg_driver"
-    video_url = "https://t.me/mishwarii/4436" # رابط الفيديو الخاص بك
-
-    welcome_text = (
-        f"🚀 **أهلاً بك يا {user_name} في منصة مشواري!**\n\n"
-        "يبدو أنك جديد هنا، المنصة الأسهل لربط الكباتن بالركاب.\n"
-        "👇 **اختر دورك الآن للبدء:**"
-    )
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("👤 دخول كراكب", url=url_rider),
-            InlineKeyboardButton("🚗 دخول ككابتن", url=url_driver)
-        ],
-        [InlineKeyboardButton("📜 قناة التعليمات", url="https://t.me/mishwarii")]
-    ])
-
-    try:
-        # إرسال الترحيب كرد (Reply) على رسالته الأولى
-        await update.message.reply_video(
-            video=video_url,
-            caption=welcome_text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        # تسجيل أنه تم الترحيب به حتى لا يزعجه البوت مرة أخرى
-        context.user_data['welcomed'] = True
-        
-    except Exception as e:
-        print(f"Error in welcoming: {e}")
 
 
 
@@ -807,28 +710,22 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
 
     return count
 
-async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    partner_id = end_chat_session(user_id)
+def end_chat_session(user_id):
+    partner_id = None
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            # البحث عن الطرف الآخر قبل الحذف
+            cur.execute("SELECT user1_id, user2_id FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
+            row = cur.fetchone()
+            if row:
+                partner_id = row[1] if row[0] == user_id else row[0]
+                # حذف الجلسة نهائياً
+                cur.execute("DELETE FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
+                conn.commit()
+        conn.close()
+    return partner_id
 
-    # إعادة الكيبورد الرئيسي حسب الرتبة
-    await sync_all_users()
-    user = USER_CACHE.get(user_id)
-    role = user['role'] if user else 'rider'
-    main_kb = get_main_kb(role, True)
-
-    await update.message.reply_text("🛑 تم إنهاء المحادثة.", reply_markup=main_kb)
-
-    if partner_id:
-        try:
-            p_user = USER_CACHE.get(partner_id)
-            p_role = p_user['role'] if p_user else 'rider'
-            await context.bot.send_message(
-                chat_id=partner_id, 
-                text="🛑 قام الطرف الآخر بإنهاء الرحلة/المحادثة.",
-                reply_markup=get_main_kb(p_role, True)
-            )
-        except: pass
 
 
 # --- المعالج الشامل (Global Handler) ---
@@ -1279,19 +1176,28 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
 
     # --- قسم الراكب: عرض الأحياء ---
+        # 1. عند الضغط على زر "طلب رحلة بالاحياء"
     elif data == "order_by_district":
+        # جلب قائمة الأحياء
         districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        if not districts:
+            await query.answer("⚠️ قائمة الأحياء غير متوفرة حالياً.")
+            return
+
         keyboard = []
+        # بناء أزرار الأحياء (صفين في كل سطر)
         for i in range(0, len(districts), 2):
             row = []
             dist1 = districts[i]
-            row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_المدينة_المنورة_{dist1}"))
+            # نستخدم بادئة searchdist_ التي يعالجها البوت
+            row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_{dist1}"))
             if i + 1 < len(districts):
                 dist2 = districts[i+1]
-                row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_المدينة_المنورة_{dist2}"))
+                row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_{dist2}"))
             keyboard.append(row)
-        
+
         keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="main_menu")])
+        
         await query.edit_message_text(
             "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1299,54 +1205,46 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-
+    # 2. عند اختيار حي محدد للبحث عن كابتن
     elif data.startswith("searchdist_"):
-        # تنفيذ البحث
-        parts = data.split("_")
-        city_name = parts[1]
-        dist_name = parts[2] # اسم الحي المختار
+        # استخراج اسم الحي من الـ callback
+        target_dist = data.replace("searchdist_", "")
         
-        await sync_all_users() # تحديث البيانات للتأكد
+        await sync_all_users() # تحديث قائمة الكباتن من القاعدة
         
+        def clean(t): 
+            return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace(" ", "").strip()
+        
+        target_clean = clean(target_dist)
         matched_drivers = []
-        # دالة تنظيف للنصوص (إزالة التاء المربوطة والهمزات)
-        def clean_text(text):
-            return text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-        target_dist_clean = clean_text(dist_name)
-
+        # البحث عن الكباتن الذين لديهم هذا الحي
         for d in CACHED_DRIVERS:
-            if d.get('districts'):
-                # تحويل قائمة أحياء الكابتن وتنظيفها
-                d_list = [clean_text(x.strip()) for x in d['districts'].replace("،", ",").split(",")]
-                if target_dist_clean in d_list:
+            if d.get('role') == 'driver' and d.get('districts'):
+                # تنظيف وتحويل النص المخزن (الذي يحتوي فواصل) إلى قائمة
+                d_dists = [clean(x) for x in d['districts'].replace("،", ",").split(",")]
+                if target_clean in d_dists:
                     matched_drivers.append(d)
 
         if not matched_drivers:
-            gps_url = f"https://t.me/{context.bot.username}?start=order_general"
-            kb = [
-                [InlineKeyboardButton("🌍 اطلب أقرب كابتن (GPS)", url=gps_url)],
-                [InlineKeyboardButton("🔙 اختيار حي آخر", callback_data=f"searchcity_{city_name}")]
-            ]
+            kb = [[InlineKeyboardButton("🌍 طلب GPS (بالموقع)", callback_data="order_general")],
+                  [InlineKeyboardButton("🔙 اختيار حي آخر", callback_data="order_by_district")]]
             await query.edit_message_text(
-                f"⚠️ **نعتذر منك..**\nلا يوجد كباتن مسجلين في حي ({dist_name}) حالياً.\n\nيمكنك تجربة الطلب عبر الموقع الجغرافي:",
-                reply_markup=InlineKeyboardMarkup(kb),
-                parse_mode=ParseMode.MARKDOWN
+                f"⚠️ نعتذر، لا يوجد كباتن نخبة متاحين حالياً في حي **{target_dist}**.",
+                reply_markup=InlineKeyboardMarkup(kb)
             )
         else:
             keyboard = []
-            for d in matched_drivers[:6]: # عرض 6 كباتن كحد أقصى
+            for d in matched_drivers[:8]:
                 keyboard.append([InlineKeyboardButton(
                     f"🚖 {d['name']} ({d.get('car_info', 'سيارة')})", 
-                    callback_data=f"book_{d['user_id']}_{dist_name}"
+                    callback_data=f"book_{d['user_id']}_{target_dist}"
                 )])
-            
-            keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data=f"searchcity_{city_name}")])
+            keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="order_by_district")])
             
             await query.edit_message_text(
-                f"✅ **كباتن متوفرين في {dist_name}:**\nاضغط على اسم الكابتن لطلب مشوار:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ وجدنا {len(matched_drivers)} كابتن متاحين في {target_dist}:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         return
 
@@ -2022,13 +1920,16 @@ def main():
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"), group=0)
 
 # أضف هذا داخل دالة main قبل معالجات النصوص العامة
-    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command), group=0)
+    # أضف هذا السطر داخل دالة main
+# تأكد من وضعه في المجموعة 0 (group=0) ليكون له الأولوية
+    application.add_handler(MessageHandler(filters.Regex("^(❌ إنهاء المحادثة|🛑 تم إنهاء المحادثة.)$"), end_chat_command), group=0)
+
 
     application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome), group=0)
+    
 
 
     # ---------------------------------------------------------
@@ -2039,8 +1940,7 @@ def main():
         admin_reply_handler
     ), group=1)
     # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
-    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=0)
-
+    
     
     
     
