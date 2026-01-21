@@ -630,6 +630,49 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
         await query.edit_message_text("📝 اختر الأحياء التي تعمل بها (اضغط للتبديل):", reply_markup=InlineKeyboardMarkup(keyboard))
 
+
+    # --- [4] قسم إدارة المشرفين (قبول/رفض الكباتن) ---
+    
+    # حالة قبول الكابتن
+    if data.startswith("verify_ok_"):
+        target_driver_id = int(data.split("_")[2])
+        
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET is_verified = True WHERE user_id = %s", (target_driver_id,))
+                conn.commit()
+            conn.close()
+            
+            # تحديث الكاش فوراً
+            await sync_all_users(force=True)
+            
+            # إشعار الأدمن بنجاح العملية
+            await query.edit_message_text(f"✅ تم تفعيل حساب الكابتن ({target_driver_id}) بنجاح.")
+            
+            # إشعار الكابتن بتفعيل حسابه
+            try:
+                await context.bot.send_message(
+                    chat_id=target_driver_id,
+                    text="🎉 **أبشرك يا كابتن!**\nتم مراجعة حسابك وتفعيله بنجاح. يمكنك الآن استقبال الطلبات وتحديث أحيائك.",
+                    reply_markup=get_main_kb('driver', True)
+                )
+            except: pass
+
+    # حالة رفض الكابتن
+    elif data.startswith("verify_no_"):
+        target_driver_id = int(data.split("_")[2])
+        
+        await query.edit_message_text(f"❌ تم رفض طلب انضمام الكابتن ({target_driver_id}).")
+        
+        try:
+            await context.bot.send_message(
+                chat_id=target_driver_id,
+                text="⚠️ نعتذر منك يا كابتن، تم رفض طلب انضمامك حالياً. يمكنك التواصل مع الإدارة للاستفسار."
+            )
+        except: pass
+
+
     elif data.startswith("toggle_"):
         dist_name = data.split("_")[1]
         
