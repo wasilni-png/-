@@ -1299,11 +1299,22 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
 
-    elif data == "order_by_district":
-        # عرض المدن للراكب
-        keyboard = [[InlineKeyboardButton(city, callback_data=f"searchcity_{city}")] for city in CITIES_DISTRICTS.keys()]
-        await query.edit_message_text("📍 اختر مدينتك للبحث عن كباتن:", reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "order_by_district":
+        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        keyboard = []
+        for i in range(0, len(districts), 2):
+            row = [InlineKeyboardButton(districts[i], callback_data=f"searchdist_المدينة المنورة_{districts[i]}")]
+            if i + 1 < len(districts):
+                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"searchdist_المدينة المنورة_{districts[i+1]}"))
+            keyboard.append(row)
+        
+        await query.edit_message_text(
+            "📍 **أحياء المدينة المنورة:**\nاختر الحي للبحث عن كباتن متوفرين حالياً:", 
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
+
 
     elif data.startswith("searchcity_"):
         # عرض أحياء المدينة للراكب
@@ -1967,7 +1978,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard = [[InlineKeyboardButton("🌍 ابحث عن أقرب كابتن (GPS)", url=search_link)]]
         
         await update.message.reply_text(
-            f"📍 حي {found_dist} ({target_city}): لا يوجد كباتن مسجلين بهذا الحي حالياً.\n\n"
+            f"📍 حي {found_dist} ({target_city}): يرجى ارسال الطلب عبر البوت لارساله إلى الكباتن القريبين منك .\n\n"
             "💡 يمكنك البحث عن أقرب كابتن متاح حولك الآن بواسطة GPS:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
