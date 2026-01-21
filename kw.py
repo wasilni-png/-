@@ -715,16 +715,17 @@ def end_chat_session(user_id):
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            # البحث عن الطرف الآخر قبل الحذف
+            # البحث عن الشريك
             cur.execute("SELECT user1_id, user2_id FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
             row = cur.fetchone()
             if row:
                 partner_id = row[1] if row[0] == user_id else row[0]
-                # حذف الجلسة نهائياً
+                # حذف الجلسة
                 cur.execute("DELETE FROM chat_sessions WHERE user1_id = %s OR user2_id = %s", (user_id, user_id))
                 conn.commit()
         conn.close()
     return partner_id
+
 
 
 
