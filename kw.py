@@ -1269,7 +1269,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
 
-        elif data == "order_by_district":
+    elif data == "order_by_district":
         districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
         keyboard = []
         for i in range(0, len(districts), 2):
