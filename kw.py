@@ -2020,6 +2020,10 @@ def main():
     application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
     application.add_handler(CallbackQueryHandler(register_callback, pattern="^reg_"), group=0)
+
+# أضف هذا داخل دالة main قبل معالجات النصوص العامة
+    application.add_handler(MessageHandler(filters.Regex("^❌ إنهاء المحادثة$"), end_chat_command), group=0)
+
     application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
 
