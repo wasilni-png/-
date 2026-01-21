@@ -1837,9 +1837,28 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تجاهل الرسائل التي لا تحتوي على نص أو ليست في مجموعة
-    if not update.message or not update.message.text: return
-    if update.message.chat.type == "private": return
-
+    if not found_dist:
+        user = update.effective_user
+        welcome_text = (
+            f"يا هلا بك يا {user.first_name} في **مشواري المدينة** 🌴✨\n\n"
+            "إذا كنت تبحث عن كابتن أو تريد التسجيل معنا، يرجى استخدام البوت مباشرة لتتمكن من الاستفادة من كافة المميزات."
+        )
+        
+        # أزرار التوجيه للتسجيل
+        keyboard = [
+            [
+                InlineKeyboardButton("🚕 التسجيل ككابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
+                InlineKeyboardButton("📱 طلب رحلة (راكب)", url=f"https://t.me/{context.bot.username}?start=order")
+            ],
+            [InlineKeyboardButton("🤖 الدخول للبوت مباشرة", url=f"https://t.me/{context.bot.username}")]
+        ]
+        
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
     user = update.effective_user
     text = update.message.text.lower()
     # تنظيف النص لتوحيد البحث (التاء المربوطة والهمزات)
