@@ -1961,6 +1961,31 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     # يمكن تجاهلها أو معالجتها كأي رسالة أخرى
     pass
 
+async def show_districts_to_driver(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    
+    await sync_all_users()
+    user_info = USER_CACHE.get(user_id, {})
+    current_dists = user_info.get('districts', "") or ""
+    
+    keyboard = []
+    for i in range(0, len(districts), 2):
+        row = []
+        for d in districts[i:i+2]:
+            status = "✅ " if d in current_dists else "❌ "
+            row.append(InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}"))
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
+    
+    await update.message.reply_text(
+        "📝 **إدارة نطاق العمل:**\nاختر الأحياء التي تعمل بها ليتمكن الركاب من العثور عليك:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
 
@@ -1999,6 +2024,11 @@ def main():
 
     application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
+
+
+    # 2. أزرار القائمة الرئيسية (نصوص محددة) - Group 0
+    # أضف السطر هنا
+        application.add_handler(MessageHandler(filters.Regex("^📝 تحديث الأحياء$"), show_districts_to_driver), group=0)
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
     
