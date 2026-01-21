@@ -1910,7 +1910,7 @@ def main():
     # المجموعة 0: الأوامر والعمليات الفورية (أولوية مطلقة)
     # ---------------------------------------------------------
     application.add_handler(CommandHandler("start", start_command), group=0)
-     application.add_handler(CommandHandler("cash", admin_cash), group=0)
+    application.add_handler(CommandHandler("cash", admin_cash), group=0)
     application.add_handler(CommandHandler("sub", admin_add_days), group=0)
     application.add_handler(CommandHandler("broadcast", admin_broadcast), group=0)
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
