@@ -196,20 +196,6 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
         conn.close()
 
 
-def clean_text(text):
-    if not text: return ""
-    # إزالة الكلمات الشائعة التي تسبب خللاً في البحث
-    common_words = ["حي", "حديقة", "مخطط", "شارع", "منطقة", "قرب"]
-    text = text.lower()
-    for word in common_words:
-        text = text.replace(word, "")
-    
-    # إزالة "ال" التعريف والمسافات الزائدة
-    text = re.sub(r'^ال', '', text) 
-    text = text.replace(" ال", " ")
-    return text.strip()
-
-
 
 
 # ==================== 🛠️ 3. دوال مساعدة ====================
@@ -800,7 +786,7 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
         return 0
 
     price = context.user_data.get('order_price', 0)
-    details = context.user_data.get('search_districts', "موقع GPS")
+    details = context.user_data.get('search_district', "موقع GPS")
     rider_id = update.effective_user.id
 
     count = 0
@@ -950,7 +936,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # --- ج) طلب مشوار عام (لأقرب كابتن/GPS) ---
         if state == 'WAIT_GENERAL_DETAILS':
-            context.user_data['search_districts'] = text # أو تفاصيل المشوار
+            context.user_data['search_district'] = text # أو تفاصيل المشوار
             context.user_data['state'] = 'WAIT_GENERAL_PRICE'
             await update.message.reply_text("💰 **كم السعر المقترح؟** (أرقام فقط):")
             return
@@ -990,7 +976,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['state'] = None
             return
 
-        if state == 'WAIT_ELITE_DISTRICTS':
+        if state == 'WAIT_ELITE_DISTRICT':
             # البحث عن كابتن في حي معين
             found = []
             await sync_all_users() # تأكيد التحديث
@@ -1411,12 +1397,9 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
 
     # --- تم اختيار المدينة -> عرض الأحياء ---
-    if data.startswith("selectcity_"):
-        # جلب الكلمة الأخيرة دائماً لضمان أنها اسم المدينة
-        city_name = data.split("_")[-1] 
-        await show_districts_by_city(update, context, city_name)
-        return
-
+    elif data.startswith("city_"):
+        city_name = data.split("_")[1]
+        districts = CITIES_DISTRICTS.get(city_name, [])
         
         # تنسيق الأزرار (2 في كل صف)
         keyboard = []
@@ -1436,7 +1419,38 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- تم اختيار الحي -> عرض الكباتن ---
-    
+    elif data.startswith("search_dist_"):
+        selected_dist = data.split("_")[2]
+        await sync_all_users() # تحديث البيانات
+
+        matched_drivers = []
+        # البحث مع معالجة التاء المربوطة والهاء
+        for d in CACHED_DRIVERS:
+            if d.get('districts'):
+                d_list = [x.strip().replace("ة", "ه") for x in d['districts'].replace("،", ",").split(",")]
+                if selected_dist.replace("ة", "ه") in d_list:
+                    matched_drivers.append(d)
+
+        if not matched_drivers:
+            await query.edit_message_text(
+                f"📍 حي {selected_dist}:\n\n⚠️ للأسف، لا يوجد كباتن مسجلين في هذا الحي حالياً.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data=f"city_الرياض")]]) # مثال
+            )
+        else:
+            keyboard = []
+            for d in matched_drivers[:8]: # عرض أول 8 فقط
+                # الزر يرسل book_ID_DISTRICT
+                keyboard.append([InlineKeyboardButton(
+                    f"🚖 {d['name']} ({d.get('car_info', 'سيارة')})", 
+                    callback_data=f"book_{d['user_id']}_{selected_dist}"
+                )])
+            
+            await query.edit_message_text(
+                f"✅ **كباتن متوفرين في {selected_dist}:**\nاضغط على الكابتن لطلب مشوار:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
 
     # ===============================================================
     # 3. بدء عملية حجز كابتن محدد (Book)
@@ -1855,26 +1869,7 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_msg = update.message.text
-    
-    # تنظيف نص الرسالة القادمة من القروب
-    cleaned_msg = clean_text(user_msg)
-    
-    found_drivers = []
-    for user_id, data in USER_CACHE.items():
-        if data.get('role') == 'driver':
-            # تنظيف قائمة أحياء السائق (مثلاً: العزيزية، المطار...)
-            driver_districts = data.get('districts', '').split('،') 
-            
-            for d in driver_districts:
-                cleaned_driver_district = clean_text(d)
-                
-                # البحث الذكي: هل الكلمة الأساسية للحي موجودة في رسالة الراكب؟
-                if cleaned_driver_district in cleaned_msg or cleaned_msg in cleaned_driver_district:
-                    if len(cleaned_driver_district) > 2: # لتجنب الكلمات القصيرة جداً
-                        found_drivers.append(data)
-                        break
-
+    # تجاهل الرسائل التي لا تحتوي على نص أو ليست في مجموعة
     if not update.message or not update.message.text: return
     if update.message.chat.type == "private": return
 
@@ -1912,23 +1907,20 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         if found_dist: break # إذا وجد الحي في مدينة معينة يتوقف عن البحث في باقي المدن
 
     # 4. إذا لم يجد اسم الحي -> يعرض أزرار المدن أولاً (لأن القائمة أصبحت كبيرة)
-        # 4. إذا لم يجد اسم الحي -> يعرض أزرار المدن
     if not found_dist:
         keyboard = []
         cities = list(CITIES_DISTRICTS.keys())
         for i in range(0, len(cities), 2):
-            # تم تعديل الكال باك ليكون مباشر ليفهمه المعالج
-            row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_{cities[i]}")]
+            row = [InlineKeyboardButton(cities[i], callback_data=f"selectcity_search_{cities[i]}")]
             if i + 1 < len(cities):
-                row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_{cities[i+1]}"))
+                row.append(InlineKeyboardButton(cities[i+1], callback_data=f"selectcity_search_{cities[i+1]}"))
             keyboard.append(row)
-
+        
         await update.message.reply_text(
-            f"يا هلا بك يا {user.first_name} ✨\nيرجى اختيار مدينتك أولاً لتحديد الحي:",
+            f"يا هلا بك يا {user.first_name} ✨\nيرجى اختيار مدينتك أولاً لتحديد الحي والعثور على كباتن:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-
 
     # 5. إذا وجد الحي -> يبحث عن الكباتن المسجلين في هذا الحي
     await sync_all_users()
@@ -2200,8 +2192,6 @@ def main():
 
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, send_fancy_welcome), group=0)
-    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=0)
-
 
 
     # ---------------------------------------------------------
@@ -2212,7 +2202,8 @@ def main():
         admin_reply_handler
     ), group=1)
     # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
-    
+application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, welcome_on_first_message), group=1)
+
     
     
     
@@ -2248,4 +2239,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
