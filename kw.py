@@ -604,9 +604,45 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("toggle_"):
         dist_name = data.split("_")[1]
-        # هنا يجب إضافة دالة لتحديث قاعدة البيانات (إضافة/حذف الحي)
-        # ثم إعادة استدعاء قائمة manage_districts لتحديث الشكل
-        await query.answer(f"تم تحديث حالة حي {dist_name}")
+        
+        # 1. جلب بيانات السائق الحالية من الكاش
+        await sync_all_users()
+        user_info = USER_CACHE.get(user_id, {})
+        current_str = user_info.get('districts', "") or ""
+        
+        # تحويل النص إلى قائمة لتسهيل الإضافة والحذف
+        current_list = [x.strip() for x in current_str.replace("،", ",").split(",") if x.strip()]
+        
+        # 2. تبديل الحالة
+        if dist_name in current_list:
+            current_list.remove(dist_name)
+            msg = f"❌ تم إزالة حي {dist_name}"
+        else:
+            current_list.append(dist_name)
+            msg = f"✅ تم إضافة حي {dist_name}"
+        
+        # 3. حفظ السلسلة الجديدة في قاعدة البيانات
+        new_districts_str = ",".join(current_list)
+        update_districts_in_db(user_id, new_districts_str) # تأكد أن هذه الدالة موجودة لديك
+        
+        # 4. تحديث الكاش فوراً لضمان ظهور التعديل
+        await sync_all_users(force=True)
+        await query.answer(msg)
+
+        # 5. إعادة بناء الكيبورد لتحديث العلامات ✅ و ❌ أمام السائق فوراً
+        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        keyboard = []
+        for i in range(0, len(districts), 2):
+            row = []
+            for d in districts[i:i+2]:
+                status = "✅ " if d in current_list else "❌ "
+                row.append(InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}"))
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
+        
+        # تعديل الأزرار فقط دون إعادة إرسال الرسالة
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
