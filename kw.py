@@ -426,6 +426,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. فحص المعاملات القادمة من الروابط (Deep Linking)
     if context.args:
         arg_value = context.args[0]
+ # معالجة ضغطة الحي من القروب (Deep Linking)
+        if arg_value.startswith("sd_"):
+            index = int(arg_value.split("_")[1])
+            districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+            selected_dist = districts[index]
+            
+            await sync_all_users()
+            matched = [d for d in CACHED_DRIVERS if d.get('districts') and selected_dist.replace("ة", "ه") in d['districts'].replace("ة", "ه")]
+            
+            if matched:
+                kb = [[InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")] for d in matched[:6]]
+                await update.message.reply_text(f"✅ وجدنا كباتن في حي **{selected_dist}**:\nاختر الكابتن لبدء المحادثة:", reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await update.message.reply_text(f"📍 حي {selected_dist} لا يوجد به كباتن حالياً، جرب طلب مشوار عام بالـ GPS.", 
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 طلب GPS", callback_data="order_general")]]))
+            return
 
         # ---------------------------------------------------------
         # (أ) حالة التسجيل المباشر كراكب (من زر الترحيب)
@@ -1267,21 +1283,27 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
 
-    elif data == "order_by_district":
-        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-        keyboard = []
-        for i in range(0, len(districts), 2):
-            row = [InlineKeyboardButton(districts[i], callback_data=f"searchdist_المدينة المنورة_{districts[i]}")]
-            if i + 1 < len(districts):
-                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"searchdist_المدينة المنورة_{districts[i+1]}"))
-            keyboard.append(row)
-        
-        await query.edit_message_text(
-            "📍 **أحياء المدينة المنورة:**\nاختر الحي للبحث عن كباتن متوفرين حالياً:", 
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+    # داخل handle_callbacks ابحث عن قسم order_by_district واستبدله:
+elif data == "order_by_district":
+    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+    keyboard = []
+    for i in range(0, len(districts), 2):
+        row = []
+        # نستخدم searchdist_ كبادئة لأن المعالج يبحث عنها
+        dist1 = districts[i]
+        row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_المدينة المنورة_{dist1}"))
+        if i + 1 < len(districts):
+            dist2 = districts[i+1]
+            row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_المدينة المنورة_{dist2}"))
+        keyboard.append(row)
+
+    await query.edit_message_text(
+        "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return
+
 
 
     elif data.startswith("searchcity_"):
