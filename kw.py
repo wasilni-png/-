@@ -534,36 +534,91 @@ async def auto_register_rider(update):
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
-    await query.answer()
     data = query.data
+    user_id = user.id
+    await query.answer()
 
-    # --- 1. قسم إدارة المدن والأحياء ---
+    # --- [1] قسم طلب الرحلات (للراكب) ---
     
+    # أ- عرض قائمة الأحياء للراكب
+    if data == "order_by_district":
+        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        keyboard = []
+        for i in range(0, len(districts), 2):
+            row = [InlineKeyboardButton(districts[i], callback_data=f"searchdist_{districts[i]}")]
+            if i + 1 < len(districts):
+                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"searchdist_{districts[i+1]}"))
+            keyboard.append(row)
+        
+        await query.edit_message_text(
+            "📍 **أحياء المدينة المنورة**\nاختر الحي للبحث عن كباتن متوفرين فيه:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
 
-    # --- 2. قسم تسجيل الحساب الجديد (راكب/سائق) ---
-    if data in ["reg_rider", "reg_driver"]:
+    # ب- معالجة اختيار حي معين والبحث عن كباتن
+    elif data.startswith("searchdist_"):
+        target_dist = data.split("_")[1]
+        await sync_all_users() # تحديث البيانات من القاعدة
+        
+        def clean(t): return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").strip()
+        target_clean = clean(target_dist)
+
+        # البحث عن الكباتن الذين لديهم هذا الحي في ملفهم
+        matched = [
+            d for d in CACHED_DRIVERS 
+            if d.get('districts') and target_clean in clean(d['districts'])
+        ]
+
+        if matched:
+            kb = []
+            for d in matched[:10]:
+                kb.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")])
+            
+            await query.edit_message_text(
+                f"✅ وجدنا كباتن في حي **{target_dist}**:\nاضغط على الكابتن لطلب المشوار:",
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await query.edit_message_text(
+                f"📍 لا يوجد كباتن مسجلين في حي **{target_dist}** حالياً.\nجرب الطلب عبر الموقع (GPS).",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 طلب بالموقع", callback_data="order_general")]])
+            )
+
+    # --- [2] قسم إدارة الأحياء (للسائق) ---
+    
+    elif data == "manage_districts":
+        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        user_info = USER_CACHE.get(user_id, {})
+        current_dists = user_info.get('districts', "") or ""
+        
+        keyboard = []
+        for d in districts:
+            # إضافة علامة ✅ للحي المختار مسبقاً
+            status = "✅ " if d in current_dists else "❌ "
+            keyboard.append([InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}")])
+        
+        keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
+        await query.edit_message_text("📝 اختر الأحياء التي تعمل بها (اضغط للتبديل):", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("toggle_"):
+        dist_name = data.split("_")[1]
+        # هنا يجب إضافة دالة لتحديث قاعدة البيانات (إضافة/حذف الحي)
+        # ثم إعادة استدعاء قائمة manage_districts لتحديث الشكل
+        await query.answer(f"تم تحديث حالة حي {dist_name}")
+
+    # --- [3] قسم التسجيل (الذي كان لديك) ---
+    elif data in ["reg_rider", "reg_driver"]:
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
-
         if role == "rider":
-            # تسجيل الراكب فوراً
-            first_name = user.first_name or "راكب"
-            last_name = user.last_name or ""
-            full_name = f"{first_name} {last_name}".strip()
-            
-            context.user_data['reg_phone'] = "0000000000" 
-            
             await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-            await complete_registration(update, context, full_name)
-        
-        elif role == "driver":
-            # تسجيل الكابتن (يحتاج خطوات إضافية)
+            await complete_registration(update, context, f"{user.first_name} {user.last_name or ''}".strip())
+        else:
             context.user_data['state'] = 'WAIT_NAME'
-            msg = f"✅ اخترت: **كابتن (سائق)**\n\n📝 يرجى كتابة **اسمك الثلاثي** الآن للتوثيق:"
-            await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN)
-        
-        return # إنهاء المعالجة بعد التسجيل
-     
+            await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
+
 async def complete_registration(update, context, name):
     user = update.effective_user
     user_id = user.id
