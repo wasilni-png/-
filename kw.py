@@ -779,7 +779,7 @@ async def complete_registration(update, context, name):
 
 async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ كابتن نخبة (بحث بالحي)", callback_data="order_by_district")],
+        [InlineKeyboardButton("⭐ كابتن نخبة (بحث بالحي)", callback_data="order_by_districts")],
         [InlineKeyboardButton("🌍 أقرب كابتن (بحث بالموقع)", callback_data="order_general")]
     ])
     await update.message.reply_text("🚖 **كيف تود البحث عن الكابتن؟**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -800,7 +800,7 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
         return 0
 
     price = context.user_data.get('order_price', 0)
-    details = context.user_data.get('search_district', "موقع GPS")
+    details = context.user_data.get('search_districts', "موقع GPS")
     rider_id = update.effective_user.id
 
     count = 0
@@ -950,7 +950,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # --- ج) طلب مشوار عام (لأقرب كابتن/GPS) ---
         if state == 'WAIT_GENERAL_DETAILS':
-            context.user_data['search_district'] = text # أو تفاصيل المشوار
+            context.user_data['search_districts'] = text # أو تفاصيل المشوار
             context.user_data['state'] = 'WAIT_GENERAL_PRICE'
             await update.message.reply_text("💰 **كم السعر المقترح؟** (أرقام فقط):")
             return
@@ -990,7 +990,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['state'] = None
             return
 
-        if state == 'WAIT_ELITE_DISTRICT':
+        if state == 'WAIT_ELITE_DISTRICTS':
             # البحث عن كابتن في حي معين
             found = []
             await sync_all_users() # تأكيد التحديث
@@ -2279,4 +2279,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
