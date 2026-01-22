@@ -618,7 +618,7 @@ async def process_district_order(update: Update, context: ContextTypes.DEFAULT_T
 # --- التسجيل ---
 # --- التسجيل المحدث ---
 
-Async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
     user_id = user.id
