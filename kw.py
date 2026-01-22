@@ -603,7 +603,7 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
         )
 
-        elif data.startswith("final_start_"):
+    elif data.startswith("final_start_"):
         parts = data.split("_")
         driver_id = int(parts[2])
         price = float(parts[3])
@@ -697,8 +697,8 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(
                 f"📍 لا يوجد كباتن مسجلين في حي **{target_dist}** حالياً.\nجرب الطلب عبر الموقع (GPS).",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 أقرب كابتن (بحث بالموقع)", url=https://t.me/{context.bot.username}?start=order_general")]])
-            )
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 أقرب كابتن (بحث بالموقع)", url=f"https://t.me/{context.bot.username}?start=order_general")]])
+
 
     # --- [2] قسم إدارة الأحياء (للسائق) ---
     
