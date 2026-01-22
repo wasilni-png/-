@@ -1930,8 +1930,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^(❌ إنهاء المحادثة|🛑 تم إنهاء المحادثة.)$"), end_chat_command), group=0)
 
 
-    application.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
-    application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
+     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
 
 
     # 2. أزرار القائمة الرئيسية (نصوص محددة) - Group 0
