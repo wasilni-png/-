@@ -547,6 +547,74 @@ async def auto_register_rider(update):
         await update.message.reply_text(welcome_new, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 
+async def find_drivers_by_message_districts(message_text):
+    """
+    تحليل الرسالة لاستخراج الحي والبحث عن السائقين المشتركين فيه
+    """
+    # 1. جلب قائمة كل الأحياء المسجلة في النظام (من قاعدة البيانات)
+    # نفترض أن لديك دالة تجلب أسماء الأحياء في قائمة بسيطة
+    all_districts = get_all_districts_list() 
+    
+    found_district = None
+
+    # 2. البحث عن أول حي مذكور في نص الرسالة
+    # نقوم بترتيب الأحياء حسب طول الاسم (الأطول أولاً) لتجنب تداخل الأسماء
+    for district in sorted(all_districts, key=len, reverse=True):
+        if district in message_text:
+            found_district = district
+            break  # التوقف عند أول حي يتم العثور عليه كما طلبت
+
+    if not found_district:
+        return None, []
+
+    # 3. جلب السائقين المسجلين في هذا الحي من قاعدة البيانات
+    drivers = []
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # نستخدم LIKE أو نظام مصفوفات حسب طريقة تخزينك للأحياء
+                query = """
+                SELECT user_id, name, car_info, phone 
+                FROM users 
+                WHERE is_driver = TRUE 
+                AND subscribed_districts @> ARRAY[%s]::text[] 
+                AND balance > 0
+                """
+                # ملاحظة: الكود أعلاه يفترض أنك تخزن الأحياء كمصفوفة (PostgreSQL)
+                # إذا كنت تخزنها كنص مفصول بفاصلة، استخدم: WHERE subscribed_districts LIKE %s
+                cur.execute(query, (found_district,))
+                drivers = cur.fetchall()
+        finally:
+            conn.close()
+
+    return found_district, drivers
+
+async def process_district_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order_text = update.message.text
+    
+    # استدعاء دالة البحث
+    district, drivers = await find_drivers_by_message_districts(order_text)
+    
+    if not district:
+        await update.message.reply_text("📍 لم أتعرف على اسم الحي في رسالتك، سيتم تعميم الطلب.")
+        return
+
+    if not drivers:
+        await update.message.reply_text(f"⚠️ لا يوجد سائقين متاحين حالياً في حي {district}.")
+        return
+
+    # إرسال الطلب للسائقين الذين تم العثور عليهم فقط
+    for d in drivers:
+        await context.bot.send_message(
+            chat_id=d['user_id'],
+            text=f"🚀 **طلب جديد في حي {district}**\n\n{order_text}"
+        )
+    
+    await update.message.reply_text(f"✅ تم إرسال طلبك إلى {len(drivers)} سائق في حي {district}.")
+
+
+
 # --- التسجيل ---
 # --- التسجيل المحدث ---
 
