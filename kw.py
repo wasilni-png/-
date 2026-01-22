@@ -584,49 +584,42 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
         )
 
-    # --- [5] قسم قبول الرحلات (للسائق) ---
-    elif data.startswith("accept_gen_"):
-        # استخراج البيانات: accept_gen_RIDERID_PRICE
+    elif data.startswith("final_start_"):
         parts = data.split("_")
-        rider_id = int(parts[2])
-        price = parts[3]
-        driver_id = query.from_user.id
-
-        # 1. التحقق من أن الرحلة لم يقبلها سائق آخر (اختياري حسب قاعدة بياناتك)
-        # 2. جلب بيانات الكابتن والراكب
-        await sync_all_users()
-        driver_info = USER_CACHE.get(driver_id)
-        rider_info = USER_CACHE.get(rider_id)
-
-        if not rider_info:
-            await query.edit_message_text("⚠️ عذراً، هذا الطلب لم يعد متاحاً.")
-            return
-
-        # 3. إنشاء جلسة دردشة بين السائق والراكب
+        driver_id = int(parts[2])
+        price = float(parts[3])
+        rider_id = user_id # الراكب هو من ضغط الزر هنا
+        
+        # 1. فتح جلسة الشات
         start_chat_session(driver_id, rider_id)
+        
+        # 2. خصم العمولة من الكابتن (مثلاً 2 ريال أو نسبة)
+        # deduct_commission_by_percent(driver_id, price) 
 
-        # 4. تحديث رسالة السائق (إخفاء أزرار القبول)
-        await query.edit_message_text(
-            f"✅ **تم قبول الرحلة بنجاح!**\n\n👤 الراكب: {rider_info['name']}\n💰 السعر المتفق عليه: {price} ريال\n\n💬 يمكنك الآن التحدث مع الراكب مباشرة هنا.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        # 3. إشعار الطرفين ببدء الشات
+        kb_chat = ReplyKeyboardMarkup([
+            [KeyboardButton("📍 مشاركة موقعي", request_location=True)],
+            [KeyboardButton("❌ إنهاء المحادثة")]
+        ], resize_keyboard=True)
 
-        # 5. إشعار الراكب بقبول الرحلة
-        try:
-            # كيبورد لإنهاء المحادثة
-            end_kb = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
-            
-            await context.bot.send_message(
-                chat_id=rider_id,
-                text=(f"✅ **أبشر! الكابتن {driver_info['name']} قبل طلبك.**\n"
-                      f"🚗 السيارة: {driver_info.get('car_info', 'غير مسجلة')}\n"
-                      f"💰 السعر: {price} ريال\n\n"
-                      "💬 يمكنك الآن مراسلته مباشرة من هنا:"),
-                reply_markup=end_kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            print(f"Error notifying rider: {e}")
+        await query.edit_message_text("✅ تم بدء الرحلة. يمكنك التحدث مع الكابتن الآن.")
+        await context.bot.send_message(chat_id=driver_id, text="✅ الراكب أكد الرحلة! يمكنك التحدث معه الآن.", reply_markup=kb_chat)
+
+    # --- [5] قسم قبول الرحلات (للسائق) ---
+        # ===============================================================
+    # [D] قبول الطلب وإرسال إشعار للراكب (نظام العرض والقبول)
+    # ===============================================================
+    elif data.startswith("accept_gen_") or data.startswith("accept_ride_"):
+        parts = data.split("_")
+        # التنسيق: accept_xxx_RiderID_Price
+        rider_id = int(parts[2])
+        price = float(parts[3])
+        driver_id = user_id # آيدي الكابتن الذي ضغط الزر
+        
+        # استدعاء الدالة المساعدة لمعالجة الإشعار
+        await process_accept_ride(update, context, rider_id, price)
+        return
+
 
 
     # ب- معالجة اختيار حي معين والبحث عن كباتن
@@ -855,6 +848,49 @@ async def complete_registration(update, context, name):
         except: pass
     finally:
         conn.close()
+async def process_accept_ride(update: Update, context: ContextTypes.DEFAULT_TYPE, rider_id: int, price: float):
+    query = update.callback_query
+    driver_id = update.effective_user.id
+    
+    # 1. جلب بيانات الكابتن من قاعدة البيانات أو الكاش
+    await sync_all_users()
+    driver_info = USER_CACHE.get(driver_id)
+
+    if not driver_info:
+        await query.answer("⚠️ حدث خطأ في جلب بياناتك كابتن.", show_alert=True)
+        return
+
+    # 2. إنشاء كيبورد للراكب (قبول العرض أو رفضه)
+    # نمرر آيدي الكابتن والسعر في الكول باك ليعرف البوت من نؤكد معه
+    kb_for_rider = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ تأكيد الرحلة وفتح الشات", callback_data=f"final_start_{driver_id}_{price}"),
+            InlineKeyboardButton("❌ إلغاء الطلب", callback_data=f"reject_ride_{driver_id}")
+        ]
+    ])
+
+    # 3. إرسال الإشعار للراكب
+    try:
+        await context.bot.send_message(
+            chat_id=rider_id,
+            text=(
+                f"🎉 **كابتن متاح الآن لمشوارك!**\n\n"
+                f"👤 **الكابتن:** {driver_info['name']}\n"
+                f"🚗 **السيارة:** {driver_info.get('car_info', 'غير محددة')}\n"
+                f"💰 **السعر المعروض:** {price} ريال\n\n"
+                f"هل تود اعتماد هذا الكابتن وبدء التواصل معه؟"
+            ),
+            reply_markup=kb_for_rider,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # 4. تحديث رسالة الكابتن لتأكيد إرسال الطلب
+        await query.edit_message_text(f"⏳ تم إرسال عرضك للراكب بقيمة {price} ريال.\nبانتظار تأكيده لفتح المحادثة.")
+        
+    except Exception as e:
+        logger.error(f"Error notifying rider: {e}")
+        await query.edit_message_text("❌ تعذر إرسال الإشعار للراكب (ربما قام بحظر البوت).")
+
 
 
 # --- طلب الرحلات ---
