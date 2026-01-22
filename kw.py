@@ -5,6 +5,7 @@ import logging
 import threading
 import os
 import re
+import asyncio
 import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
@@ -1903,13 +1904,20 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
-def main():
+async def main(): # ✅ أضفنا async هنا
     # 1. تهيئة السيرفر وقاعدة البيانات
     threading.Thread(target=run_flask, daemon=True).start()
     init_db()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
+    # تحديث كاش الكباتن والأحياء عند تشغيل البوت مباشرة
+    print("🔄 جاري مزامنة بيانات الكباتن والأحياء...")
+    try:
+        await sync_all_users(force=True) # ✅ الآن ستعمل بدون خطأ SyntaxError
+    except Exception as e:
+        print(f"⚠️ فشل تحديث الكاش عند البداية: {e}")
+
     # ---------------------------------------------------------
     # المجموعة 0: الأوامر والعمليات الفورية (أولوية مطلقة)
     # ---------------------------------------------------------
@@ -1918,74 +1926,41 @@ def main():
     application.add_handler(CommandHandler("sub", admin_add_days), group=0)
     application.add_handler(CommandHandler("broadcast", admin_broadcast), group=0)
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
-    application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
+    application.add_handler(CommandHandler("send", admin_send_to_user), group=0)
     
-    # الحل الأبسط والأفضل: إزالة الفلتر ليتم معالجة كل شيء داخل الدالة
+    # معالج الأزرار الموحد (register_callback)
     application.add_handler(CallbackQueryHandler(register_callback), group=0)
 
-
-# أضف هذا داخل دالة main قبل معالجات النصوص العامة
-    # أضف هذا السطر داخل دالة main
-# تأكد من وضعه في المجموعة 0 (group=0) ليكون له الأولوية
+    # معالجات الرسائل الخاصة بالإنهاء والأحياء
     application.add_handler(MessageHandler(filters.Regex("^(❌ إنهاء المحادثة|🛑 تم إنهاء المحادثة.)$"), end_chat_command), group=0)
-
-
     application.add_handler(MessageHandler(filters.Regex("^❌"), start_command), group=0)
-
-
-    # 2. أزرار القائمة الرئيسية (نصوص محددة) - Group 0
-    # أضف السطر هنا
     application.add_handler(MessageHandler(filters.Regex("^📝 تحديث الأحياء$"), show_districts_to_driver), group=0)
-# أضف هذا السطر لمراقبة كلمة "احياء" في المجموعات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.Regex("^(احياء|الأحياء|الأحياء المتاحة)$"), group_districts_handler), group=0)
 
-
-    # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
+    # ---------------------------------------------------------
+    # المجموعات الأخرى (1, 2, 3, 4)
+    # ---------------------------------------------------------
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.REPLY & filters.User(ADMIN_IDS), admin_reply_handler), group=1)
     
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, global_handler), group=2)
 
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.TEXT | filters.LOCATION) & ~filters.COMMAND, chat_relay_handler), group=3)
 
-    # ---------------------------------------------------------
-    # المجموعة 1: ردود الأدمن والنظام (قبل الدردشة العامة)
-    # ---------------------------------------------------------
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.REPLY & filters.User(ADMIN_IDS), 
-        admin_reply_handler
-    ), group=1)
-    # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
-    
-    
-    
-    
-    
-
-    # ---------------------------------------------------------
-    # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
-    # ---------------------------------------------------------
-    # ملاحظة: تم رفع الـ global_handler قبل الـ relay لضمان عمل التسجيل
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
-        global_handler
-    ), group=2)
-
-    # ---------------------------------------------------------
-    # المجموعة 3: نظام التوجيه (Chat Relay)
-    # ---------------------------------------------------------
-    # لا تعمل هذه إلا إذا لم تكن الرسالة (أمر) أو (بيانات تسجيل)
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.TEXT | filters.LOCATION) & ~filters.COMMAND,
-        chat_relay_handler
-    ), group=3)
-
-    # ---------------------------------------------------------
-    # المجموعة 4: المواقع والمجموعات العامة
-    # ---------------------------------------------------------
     application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=4)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner), group=4)
 
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنظام المجموعات (0 -> 4) بنجاح...")
-    await sync_all_users(force=True)
-    application.run_polling(drop_pending_updates=True)
+
+    # في حال استخدام async main، نستخدم الطريقة التالية للتشغيل:
+    async with application:
+        await application.initialize()
+        await application.start()
+        await application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    main()
+    # ✅ الطريقة الصحيحة لتشغيل الدالة المتزامنة
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
