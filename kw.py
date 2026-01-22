@@ -969,6 +969,27 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # نستخدم النص إذا وجد، وإلا نص فارغ (لتجنب الأخطاء مع الصور)
     text = update.message.text if update.message.text else ""
 
+
+    if chat_id in ADMIN_IDS and update.message.reply_to_message:
+        # البحث عن الـ ID داخل الرسالة التي تم الرد عليها
+        original_msg = update.message.reply_to_message.text or update.message.reply_to_message.caption
+        if original_msg:
+            match = re.search(r"ID:\s*`?(\d+)`?", original_msg)
+            if match:
+                target_user_id = int(match.group(1))
+                try:
+                    # إرسال الرسالة للمستخدم (سواء نص، صورة، أو صوت)
+                    await context.bot.copy_message(
+                        chat_id=target_user_id,
+                        from_chat_id=chat_id,
+                        message_id=update.message.message_id
+                    )
+                    await update.message.reply_text(f"✅ تم إرسال ردك للمستخدم {target_user_id}")
+                    save_chat_log(chat_id, target_user_id, text or "[وسائط]", "admin_reply")
+                    return # إنهاء الدالة هنا حتى لا يكمل البوت تنفيذ أوامر أخرى
+                except Exception as e:
+                    await update.message.reply_text(f"❌ فشل الإرسال: {e}")
+                    return
     # ---------------------------------------------------------
     # [الفلتر الأول] المحادثات النشطة (Chat Relay)
     # ---------------------------------------------------------
@@ -2078,41 +2099,7 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # منع الرسالة من الوصول للـ global_handler
     raise ApplicationHandlerStop
 
-async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    msg_text = update.message.text or "[ملف/صورة]"
 
-    # --- (أ) إذا كان المرسل هو الأدمن (يريد الرد على عضو) ---
-    if chat_id in ADMIN_IDS and update.message.reply_to_message:
-        original_msg = update.message.reply_to_message.text or update.message.reply_to_message.caption
-        if not original_msg: return
-
-        try:
-            # استخراج ID العضو من نص الرسالة الأصلية
-            target_user_id = int(re.search(r"ID:\s*`?(\d+)`?", original_msg).group(1))
-            
-            # 1. إرسال الرد للعضو
-            await context.bot.copy_message(
-                chat_id=target_user_id,
-                from_chat_id=chat_id,
-                message_id=update.message.message_id
-            )
-            
-            # 2. حفظ الرد في السجلات (من الأدمن للعضو)
-            save_chat_log(chat_id, target_user_id, msg_text, "admin_reply")
-
-            await update.message.reply_text(f"✅ تم إرسال الرد وحفظه في السجل.")
-            
-        except AttributeError:
-             await update.message.reply_text("⚠️ لم أتمكن من استخراج ID العضو. تأكد أنك ترد على رسالة البوت التي تحتوي على البيانات.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ حدث خطأ: {e}")
-        return
-
-    # --- (ب) إذا وصلت رسالة هنا ولم تكن رداً (نعتبرها رسالة مجهولة من الأدمن نفسه) ---
-    # يمكن تجاهلها أو معالجتها كأي رسالة أخرى
-    pass
 
 async def show_districts_to_driver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -2162,12 +2149,6 @@ async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
 
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is Running!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 def main():
