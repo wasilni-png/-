@@ -533,244 +533,357 @@ async def auto_register_rider(update):
 
 async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = update.effective_user
     data = query.data
-    user_id = user.id
-    await query.answer()
+    user_id = update.effective_user.id
 
-    # --- [1] قسم طلب الرحلات (للراكب) ---
-    
-    # أ- عرض قائمة الأحياء للراكب
-    if data == "order_by_district":
+    # 1. محاولة إغلاق مؤشر التحميل فوراً لتجنب تعليق الزر
+    try:
+        await query.answer()
+    except:
+        pass
+
+    # ===============================================================
+    # [A] إعدادات السائق (المناطق والأحياء)
+    # ===============================================================
+    if data == "districts_settings":
+        # افتراضياً نعرض المدينة المنورة (أو يمكن جعلها ديناميكية لاحقاً)
+        from_city = "المدينة المنورة"
+        # حفظ المدينة في السياق للرجوع إليها
+        context.user_data['current_managing_city'] = from_city
+        await show_districts_by_city(update, context, from_city)
+        return
+
+    elif data.startswith("toggle_dist_"):
+        dist_name = data.replace("toggle_dist_", "")
+        city_name = context.user_data.get('current_managing_city', "المدينة المنورة")
+        
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    # جلب الأحياء الحالية
+                    cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
+                    res = cur.fetchone()
+                    current_list = []
+                    if res and res[0]:
+                        # تنظيف النص وتحويله لقائمة
+                        current_list = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
+                    
+                    # التبديل (إضافة أو حذف)
+                    if dist_name in current_list:
+                        current_list.remove(dist_name)
+                    else:
+                        current_list.append(dist_name)
+                    
+                    # الحفظ
+                    new_districts_str = "، ".join(current_list)
+                    cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
+                    conn.commit()
+            except Exception as e:
+                print(f"Error toggling district: {e}")
+            finally:
+                conn.close()
+
+            # تحديث الكاش وإعادة الرسم
+            await sync_all_users(force=True)
+            await show_districts_by_city(update, context, city_name)
+        return
+
+    elif data == "save_districts":
+        await query.edit_message_text(
+            "✅ **تم حفظ مناطق عملك بنجاح!**\nسيصلك إشعار فور طلب أي مشوار في هذه الأحياء.\n\nشكراً لك يا كابتن.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # ===============================================================
+    # [B] الراكب: اختيار الأحياء والبحث
+    # ===============================================================
+    elif data == "order_by_district":
+        # تأكد من أن المتغير CITIES_DISTRICTS معرف في بداية ملفك
         districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
+        if not districts:
+            await query.edit_message_text("⚠️ قائمة الأحياء غير متوفرة حالياً.")
+            return
+
         keyboard = []
         for i in range(0, len(districts), 2):
-            row = [InlineKeyboardButton(districts[i], callback_data=f"searchdist_{districts[i]}")]
+            row = []
+            dist1 = districts[i]
+            row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_{dist1}"))
             if i + 1 < len(districts):
-                row.append(InlineKeyboardButton(districts[i+1], callback_data=f"searchdist_{districts[i+1]}"))
+                dist2 = districts[i+1]
+                row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_{dist2}"))
             keyboard.append(row)
+
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="main_menu")]) # تأكد من وجود main_menu أو عدلها
         
         await query.edit_message_text(
-            "📍 **أحياء المدينة المنورة**\nاختر الحي للبحث عن كباتن متوفرين فيه:",
+            "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
+        return
 
-    # عند ضغط السائق على "حفظ وإنهاء"
-        # عند ضغط السائق على "حفظ وإنهاء"
-    elif data == "driver_home":
-        # 1. جلب بيانات السائق الحالية لعرض الأحياء التي تم حفظها (اختياري للتوثيق)
-        user_info = USER_CACHE.get(user_id, {})
-        saved_dists = user_info.get('districts', "لا توجد أحياء مختارة")
-        if not saved_dists: saved_dists = "لا توجد أحياء مختارة"
-        
-        # 2. تحويل الرسالة من "قائمة أزرار" إلى "نص تأكيدي" فقط (ستختفي الأزرار هنا)
-        confirm_text = (
-            "✅ **تم حفظ الأحياء بنجاح!**\n\n"
-            f"📍 نطاق عملك الحالي:\n_{saved_dists}_\n\n"
-            "يمكنك الآن استقبال الطلبات من الركاب في هذه المناطق."
-        )
-        
-        await query.edit_message_text(
-            text=confirm_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=None  # هذا السطر هو المسؤول عن إخفاء قائمة الأزرار تماماً
-        )
-
-        # 3. إرسال الكيبورد الرئيسي للسائق في رسالة جديدة لكي يتمكن من إكمال استخدامه للبوت
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="الآن، يمكنك العودة لمهامك من القائمة أدناه:",
-            reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
-        )
-
-    # --- [5] قسم قبول الرحلات (للسائق) ---
-    elif data.startswith("accept_gen_"):
-        # استخراج البيانات: accept_gen_RIDERID_PRICE
-        parts = data.split("_")
-        rider_id = int(parts[2])
-        price = parts[3]
-        driver_id = query.from_user.id
-
-        # 1. التحقق من أن الرحلة لم يقبلها سائق آخر (اختياري حسب قاعدة بياناتك)
-        # 2. جلب بيانات الكابتن والراكب
-        await sync_all_users()
-        driver_info = USER_CACHE.get(driver_id)
-        rider_info = USER_CACHE.get(rider_id)
-
-        if not rider_info:
-            await query.edit_message_text("⚠️ عذراً، هذا الطلب لم يعد متاحاً.")
-            return
-
-        # 3. إنشاء جلسة دردشة بين السائق والراكب
-        start_chat_session(driver_id, rider_id)
-
-        # 4. تحديث رسالة السائق (إخفاء أزرار القبول)
-        await query.edit_message_text(
-            f"✅ **تم قبول الرحلة بنجاح!**\n\n👤 الراكب: {rider_info['name']}\n💰 السعر المتفق عليه: {price} ريال\n\n💬 يمكنك الآن التحدث مع الراكب مباشرة هنا.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-        # 5. إشعار الراكب بقبول الرحلة
-        try:
-            # كيبورد لإنهاء المحادثة
-            end_kb = ReplyKeyboardMarkup([[KeyboardButton("❌ إنهاء المحادثة")]], resize_keyboard=True)
-            
-            await context.bot.send_message(
-                chat_id=rider_id,
-                text=(f"✅ **أبشر! الكابتن {driver_info['name']} قبل طلبك.**\n"
-                      f"🚗 السيارة: {driver_info.get('car_info', 'غير مسجلة')}\n"
-                      f"💰 السعر: {price} ريال\n\n"
-                      "💬 يمكنك الآن مراسلته مباشرة من هنا:"),
-                reply_markup=end_kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            print(f"Error notifying rider: {e}")
-
-
-    # ب- معالجة اختيار حي معين والبحث عن كباتن
     elif data.startswith("searchdist_"):
-        target_dist = data.split("_")[1]
-        await sync_all_users() # تحديث البيانات من القاعدة
+        target_dist = data.replace("searchdist_", "")
         
-        def clean(t): return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").strip()
+        # تحديث القائمة لضمان وجود أحدث الكباتن
+        await sync_all_users() 
+        
+        def clean(t): 
+            return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace(" ", "").strip()
+        
         target_clean = clean(target_dist)
+        matched_drivers = []
 
-        # البحث عن الكباتن الذين لديهم هذا الحي في ملفهم
-        matched = [
-            d for d in CACHED_DRIVERS 
-            if d.get('districts') and target_clean in clean(d['districts'])
-        ]
+        # البحث في الكاش (CACHED_DRIVERS يجب أن تكون معرفة عالمياً)
+        for d in CACHED_DRIVERS:
+            if d.get('role') == 'driver' and d.get('districts'):
+                d_dists = [clean(x) for x in d['districts'].replace("،", ",").split(",")]
+                if target_clean in d_dists:
+                    matched_drivers.append(d)
 
-        if matched:
-            kb = []
-            for d in matched[:10]:
-                kb.append([InlineKeyboardButton(f"🚖 اطلب الكابتن {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")])
-            
+        if not matched_drivers:
+            kb = [[InlineKeyboardButton("🌍 طلب GPS (بالموقع)", callback_data="order_general")],
+                  [InlineKeyboardButton("🔙 اختيار حي آخر", callback_data="order_by_district")]]
             await query.edit_message_text(
-                f"✅ وجدنا كباتن في حي **{target_dist}**:\nاضغط على الكابتن لطلب المشوار:",
+                f"⚠️ نعتذر، لا يوجد كباتن نخبة متاحين حالياً في حي **{target_dist}**.",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode=ParseMode.MARKDOWN
             )
         else:
+            keyboard = []
+            # عرض أول 8 كباتن فقط لتجنب طول القائمة
+            for d in matched_drivers[:8]:
+                keyboard.append([InlineKeyboardButton(
+                    f"🚖 {d['name']} ({d.get('car_info', 'سيارة')})", 
+                    callback_data=f"book_{d['user_id']}_{target_dist}"
+                )])
+            keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="order_by_district")])
+            
             await query.edit_message_text(
-                f"📍 لا يوجد كباتن مسجلين في حي **{target_dist}** حالياً.\nجرب الطلب عبر الموقع (GPS).",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 طلب بالموقع", callback_data="order_general")]])
+                f"✅ وجدنا {len(matched_drivers)} كابتن متاحين في {target_dist}:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        return
 
-    # --- [2] قسم إدارة الأحياء (للسائق) ---
-    
-    elif data == "manage_districts":
-        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-        user_info = USER_CACHE.get(user_id, {})
-        current_dists = user_info.get('districts', "") or ""
-        
-        keyboard = []
-        for d in districts:
-            # إضافة علامة ✅ للحي المختار مسبقاً
-            status = "✅ " if d in current_dists else "❌ "
-            keyboard.append([InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}")])
-        
-        keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
-        await query.edit_message_text("📝 اختر الأحياء التي تعمل بها (اضغط للتبديل):", reply_markup=InlineKeyboardMarkup(keyboard))
+    # ===============================================================
+    # [C] بدء الحجز (Booking)
+    # ===============================================================
+    elif data == "order_general":
+        context.user_data['state'] = 'WAIT_GENERAL_DETAILS' 
+        await query.edit_message_text(
+            "🌍 **البحث عن أقرب كابتن (GPS):**\n\n"
+            "📝 يرجى كتابة **تفاصيل مشوارك** الآن (من وين لوين؟):",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
 
+    elif data.startswith("book_"):
+        parts = data.split("_")
+        driver_id = parts[1]
+        dist_name = parts[2] if len(parts) > 2 else "المحدد"
 
-    # --- [4] قسم إدارة المشرفين (قبول/رفض الكباتن) ---
-    
-    # حالة قبول الكابتن
-    if data.startswith("verify_ok_"):
-        target_driver_id = int(data.split("_")[2])
+        # التحقق: هل المستخدم في قروب أم خاص؟
+        if update.effective_chat.type != "private":
+            bot_username = context.bot.username
+            url = f"https://t.me/{bot_username}?start=order_{driver_id}"
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار والسعر", url=url)
+            ]])
+            await query.edit_message_text(
+                f"📥 **لقد اخترت كابتن في حي {dist_name}**\n\n"
+                "لإكمال الطلب وحماية خصوصيتك، اضغط الزر بالأسفل للانتقال للخاص:",
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            # المستخدم في الخاص
+            context.user_data.update({
+                'driver_to_order': driver_id,
+                'state': 'WAIT_TRIP_DETAILS'
+            })
+            await query.edit_message_text("📝 **اكتب تفاصيل مشوارك والسعر المقترح الآن:**")
+        return
+
+    # ===============================================================
+    # [D] القبول والرفض (Flow)
+    # ===============================================================
+    elif data.startswith("accept_ride_") or data.startswith("accept_gen_"):
+        parts = data.split("_")
+        # التنسيق المتوقع: accept_ride_RiderID_Price
+        rider_id = int(parts[2])
+        price = float(parts[3])
+        driver_id = user_id
         
+        conn = get_db_connection()
+        can_accept = False
+        driver_name = "كابتن"
+        driver_car = "سيارة"
+
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT balance, name, car_info FROM users WHERE user_id = %s", (driver_id,))
+                    res = cur.fetchone()
+                    if res:
+                        current_bal = res[0]
+                        driver_name = res[1]
+                        driver_car = res[2]
+                        # الحد الأدنى للرصيد
+                        if current_bal >= -5: 
+                            can_accept = True
+            finally:
+                conn.close()
+
+        if not can_accept:
+            await query.answer("⚠️ رصيدك غير كافٍ! يرجى شحن المحفظة.", show_alert=True)
+            return
+
+        await query.edit_message_text("⏳ تم إرسال موافقتك للعميل.. بانتظار تأكيده لفتح المحادثة.")
+
+        kb_confirm = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💬 موافقة وفتح الدردشة", callback_data=f"final_start_{driver_id}_{price}"),
+                InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{driver_id}")
+            ]
+        ])
+
+        try:
+            await context.bot.send_message(
+                chat_id=rider_id,
+                text=(f"🎉 **وافق الكابتن على طلبك!**\n\n"
+                      f"👤 الكابتن: {driver_name}\n"
+                      f"🚗 السيارة: {driver_car}\n"
+                      f"💰 السعر: {price} ريال\n\n"
+                      f"هل تود تأكيد الرحلة وفتح المحادثة؟"),
+                reply_markup=kb_confirm,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            await query.edit_message_text("❌ تعذر الوصول للعميل (قد يكون قام بحظر البوت).")
+        return
+
+    elif data.startswith("reject_ride_"):
+        # التنسيق: reject_ride_TargetID
+        target_id = int(data.split("_")[2])
+        await query.edit_message_text("❌ تم رفض الطلب.")
+        try:
+            await context.bot.send_message(chat_id=target_id, text="❌ عذراً، تم إلغاء/رفض الطلب من الطرف الآخر.")
+        except: pass
+        return
+
+    elif data.startswith("final_start_"):
+        # التنسيق: final_start_DriverID_Price
+        parts = data.split("_")
+        driver_id = int(parts[2])
+        price = float(parts[3])
+        rider_id = user_id
+        commission = price * 0.10  # نسبة العمولة
+
+        # خصم العمولة
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
+                    conn.commit()
+            finally:
+                conn.close()
+
+        # تفعيل جلسة الشات (تأكد أن الدالة موجودة لديك)
+        start_chat_session(driver_id, rider_id)
+
+        # إشعار الأدمن
+        admin_msg = (
+            f"💰 **تمت عملية جديدة**\n"
+            f"👤 راكب: `{rider_id}` | 🚖 كابتن: `{driver_id}`\n"
+            f"💵 السعر: {price} | 📉 العمولة: {commission}"
+        )
+        for aid in ADMIN_IDS:
+            try: await context.bot.send_message(chat_id=aid, text=admin_msg, parse_mode=ParseMode.MARKDOWN)
+            except: pass
+
+        # كيبورد الشات
+        kb_chat = ReplyKeyboardMarkup([
+            [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
+            [KeyboardButton("❌ إنهاء المحادثة")]
+        ], resize_keyboard=True)
+
+        # رسالة للراكب
+        await query.edit_message_text("✅ تم بدء الرحلة وفتح الخط مع الكابتن.")
+        await context.bot.send_message(
+            chat_id=rider_id, 
+            text="🟢 **بدأت المحادثة**\nيمكنك الآن مشاركة موقعك أو التحدث مع الكابتن.", 
+            reply_markup=kb_chat
+        )
+
+        # رسالة للكابتن
+        try:
+            await context.bot.send_message(
+                chat_id=driver_id, 
+                text=f"✅ **تم تأكيد الرحلة!**\nتم خصم العمولة ({commission} ريال).\nتحدث مع العميل الآن.", 
+                reply_markup=kb_chat
+            )
+        except: pass
+        return
+
+    # ===============================================================
+    # [E] لوحة تحكم الأدمن (Admin)
+    # ===============================================================
+    elif data.startswith("verify_"):
+        parts = data.split("_")
+        action = parts[1]      # "ok" or "no"
+        target_uid = int(parts[2])
+        is_verified = (action == "ok")
+
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE users SET is_verified = %s WHERE user_id = %s", (is_verified, target_uid))
+                    conn.commit()
+            finally:
+                conn.close()
+
+        status_text = "✅ موثق" if is_verified else "❌ مرفوض"
+        await query.edit_message_text(f"تم تحديث حالة المستخدم {target_uid} إلى: {status_text}")
+        
+        msg = "🎉 تهانينا! تم توثيق حسابك كابتن." if is_verified else "❌ نأسف، تم رفض طلب التوثيق."
+        try:
+            # هنا نفترض وجود دالة get_main_kb لجلب القائمة الرئيسية
+            # إذا لم تكن موجودة، احذف reply_markup
+            markup = get_main_kb('driver', is_verified) 
+            await context.bot.send_message(chat_id=target_uid, text=msg, reply_markup=markup)
+        except:
+            # محاولة إرسال رسالة نصية فقط في حال فشل الكيبورد
+            try: await context.bot.send_message(chat_id=target_uid, text=msg)
+            except: pass
+        
+        await sync_all_users(force=True)
+        return
+
+    elif data.startswith("admin_block_"):
+        target_id = int(data.split("_")[2])
         conn = get_db_connection()
         if conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE users SET is_verified = True WHERE user_id = %s", (target_driver_id,))
+                cur.execute("UPDATE users SET is_blocked = TRUE WHERE user_id = %s", (target_id,))
                 conn.commit()
             conn.close()
-            
-            # تحديث الكاش فوراً
-            await sync_all_users(force=True)
-            
-            # إشعار الأدمن بنجاح العملية
-            await query.edit_message_text(f"✅ تم تفعيل حساب الكابتن ({target_driver_id}) بنجاح.")
-            
-            # إشعار الكابتن بتفعيل حسابه
-            try:
-                await context.bot.send_message(
-                    chat_id=target_driver_id,
-                    text="🎉 **أبشرك يا كابتن!**\nتم مراجعة حسابك وتفعيله بنجاح. يمكنك الآن استقبال الطلبات وتحديث أحيائك.",
-                    reply_markup=get_main_kb('driver', True)
-                )
-            except: pass
-
-    # حالة رفض الكابتن
-    elif data.startswith("verify_no_"):
-        target_driver_id = int(data.split("_")[2])
         
-        await query.edit_message_text(f"❌ تم رفض طلب انضمام الكابتن ({target_driver_id}).")
-        
+        await query.answer("✅ تم حظر المستخدم")
         try:
-            await context.bot.send_message(
-                chat_id=target_driver_id,
-                text="⚠️ نعتذر منك يا كابتن، تم رفض طلب انضمامك حالياً. يمكنك التواصل مع الإدارة للاستفسار."
-            )
-        except: pass
+            await query.edit_message_caption(caption=query.message.caption + "\n\n🚫 (تم حظر هذا العضو)")
+        except:
+            await query.edit_message_text(text=query.message.text + "\n\n🚫 (تم حظر هذا العضو)")
+        return
 
-
-    elif data.startswith("toggle_"):
-        dist_name = data.split("_")[1]
-        
-        # 1. جلب البيانات من الكاش المحلي (سريع جداً)
-        user_info = USER_CACHE.get(user_id, {})
-        current_str = user_info.get('districts', "") or ""
-        
-        # تحويل النص إلى قائمة
-        current_list = [x.strip() for x in current_str.replace("،", ",").split(",") if x.strip()]
-        
-        # 2. التبديل الفوري في الذاكرة (UI Logic)
-        if dist_name in current_list:
-            current_list.remove(dist_name)
-            alert_msg = f"❌ تم إزالة {dist_name}"
-        else:
-            current_list.append(dist_name)
-            alert_msg = f"✅ تم إضافة {dist_name}"
-        
-        # 3. تحديث الكاش المحلي فوراً (قبل قاعدة البيانات لضمان السرعة)
-        new_districts_str = ",".join(current_list)
-        USER_CACHE[user_id]['districts'] = new_districts_str
-
-        # 4. تحديث شكل الأزرار فوراً للمستخدم
-        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-        keyboard = []
-        for i in range(0, len(districts), 2):
-            row = []
-            for d in districts[i:i+2]:
-                status = "✅ " if d in current_list else "❌ "
-                row.append(InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}"))
-            keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
-        
-        # تحديث الأزرار فقط (أسرع من edit_message_text)
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        # إرسال تنبيه صغير يختفي بسرعة
-        await query.answer(alert_msg)
-
-        # 5. التحديث في الخلفية (Database Sync) - لا يعطل واجهة المستخدم
-        update_districts_in_db(user_id, new_districts_str)
-
-
-    # --- [3] قسم التسجيل (الذي كان لديك) ---
-    elif data in ["reg_rider", "reg_driver"]:
-        role = "rider" if data == "reg_rider" else "driver"
-        context.user_data['reg_role'] = role
-        if role == "rider":
-            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-            await complete_registration(update, context, f"{user.first_name} {user.last_name or ''}".strip())
-        else:
-            context.user_data['state'] = 'WAIT_NAME'
-            await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
+    elif data.startswith("admin_quickcash_"):
+        target_id = data.split("_")[2]
+        await query.message.reply_text(f"نسخ سريع للأمر:\n`/cash {target_id} 50`", parse_mode=ParseMode.MARKDOWN)
+        return
 
 async def complete_registration(update, context, name):
     user = update.effective_user
@@ -1278,462 +1391,62 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
-async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str = "المدينة المنورة"):
+async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str):
     query = update.callback_query
     user_id = update.effective_user.id
     
-    # تأكيد استقبال الضغطة لمنع تعليق الزر في تيليجرام
-    try: await query.answer()
-    except: pass
-
-    # 1. جلب أحياء المستخدم الحالية من القاعدة
+    # 1. جلب أحياء الكابتن الحالية من قاعدة البيانات
     conn = get_db_connection()
-    current_districts = []
+    user_districts = []
     if conn:
         with conn.cursor() as cur:
             cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
             res = cur.fetchone()
             if res and res[0]:
-                current_districts = [d.strip() for d in res[0].replace("،", ",").split(",") if d.strip()]
+                # تنظيف وتحويل النص إلى قائمة
+                user_districts = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
         conn.close()
 
-    # 2. جلب أحياء المدينة المنورة
+    # 2. جلب قائمة أحياء المدينة من الثوابت (CITIES_DISTRICTS)
     all_districts = CITIES_DISTRICTS.get(city_name, [])
+    
+    if not all_districts:
+        await query.edit_message_text(f"⚠️ عذراً، لا توجد أحياء مسجلة لمدينة {city_name}.")
+        return
 
+    # 3. بناء لوحة الأزرار
     keyboard = []
-    # ترتيب الأزرار: زرين في كل صف
     for i in range(0, len(all_districts), 2):
         row = []
-        for j in range(2):
-            if i + j < len(all_districts):
-                dist_name = all_districts[i + j]
-                status = "✅ " if dist_name in current_districts else "⬜ "
-                # نضع اسم المدينة في الـ callback لضمان معالجة صحيحة
-                row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
+        # الحي الأول في الصف
+        dist1 = all_districts[i]
+        status1 = "✅" if dist1 in user_districts else "❌"
+        row.append(InlineKeyboardButton(f"{status1} {dist1}", callback_data=f"toggle_dist_{dist1}"))
+        
+        # الحي الثاني في الصف (إذا وجد)
+        if i + 1 < len(all_districts):
+            dist2 = all_districts[i+1]
+            status2 = "✅" if dist2 in user_districts else "❌"
+            row.append(InlineKeyboardButton(f"{status2} {dist2}", callback_data=f"toggle_dist_{dist2}"))
+        
+        keyboard.append(row)
 
-    # 3. أزرار التحكم السفلية (حذفنا العودة للمدن لأن البوت مخصص للمدينة فقط)
-    keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="main_menu")])
-
-    text = (
-        f"🏙 **إعدادات العمل في {city_name}:**\n\n"
-        "اضغط على الحي لتفعيله أو تعطيله:\n"
-        "✅ = ستصلك طلبات هذا الحي\n"
-        "⬜ = لن تصلك طلبات هذا الحي"
+    # 4. أزرار التحكم النهائية
+    keyboard.append([InlineKeyboardButton("💾 حفظ وإغلاق", callback_data="save_districts")])
+    
+    msg_text = (
+        f"📍 **إعدادات أحياء {city_name}:**\n\n"
+        "• اضغط على اسم الحي لتفعيله أو إلغائه.\n"
+        "• الحي الذي بجانبه (✅) يعني أنك ستستلم منه طلبات.\n"
+        "• الحي الذي بجانبه (❌) يعني أنه متوقف حالياً."
     )
-    
-    try:
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        print(f"Error in show_districts: {e}")
 
+    await query.edit_message_text(
+        text=msg_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-# ==================== معالج الأزرار الشامل (محدث) ====================
-
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    user_id = update.effective_user.id
-
-    # محاولة إغلاق مؤشر التحميل لتجنب التعليق
-    try: await query.answer()
-    except: pass
-
-    if data == "districts_settings":
-        # عرض أحياء المدينة المنورة للسائق فوراً
-        from_city = "المدينة المنورة"
-        await show_districts_by_city(update, context, from_city)
-        return
-
-    # ===============================================================
-    # [A] قسم الكابتن: إعدادات المناطق (تفعيل/إلغاء)
-    # ===============================================================
-
-  
-
-    elif data.startswith("toggle_dist_"):
-        # عند الضغط على اسم حي (تفعيل/إلغاء)
-        dist_name = data.replace("toggle_dist_", "")
-        
-        # استرجاع المدينة التي كان يتصفحها الكابتن
-        city_name = context.user_data.get('current_managing_city')
-        
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                # 1. جلب القائمة الحالية
-                cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
-                res = cur.fetchone()
-                current_list = []
-                if res and res[0]:
-                    current_list = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
-                
-                # 2. التبديل (إضافة أو حذف)
-                if dist_name in current_list:
-                    current_list.remove(dist_name)
-                else:
-                    current_list.append(dist_name)
-                
-                # 3. الحفظ في القاعدة
-                new_districts_str = "، ".join(current_list)
-                cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
-                conn.commit()
-            conn.close()
-
-            # 4. تحديث الكاش وإعادة عرض القائمة
-            await sync_all_users(force=True)
-            
-            if city_name:
-                await show_districts_by_city(update, context, city_name)
-            else:
-                # لو فقدنا السياق (نادر جداً)، نعيده لاختيار المدينة
-                await districts_settings_view(update, context)
-        return
-
-    elif data == "save_districts":
-        # الحفظ النهائي
-        await query.edit_message_text(
-            "✅ **تم حفظ مناطق عملك بنجاح!**\nسيصلك إشعار فور طلب أي مشوار في هذه الأحياء.\n\nشكراً لك يا كابتن.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    # ===============================================================
-    # [B] قسم الراكب: البحث عن كابتن (النخبة)
-    # ===============================================================
-
-    # --- قسم الراكب: عرض الأحياء ---
-        # 1. عند الضغط على زر "طلب رحلة بالاحياء"
-    elif data == "order_by_district":
-        # جلب قائمة الأحياء
-        districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-        if not districts:
-            await query.answer("⚠️ قائمة الأحياء غير متوفرة حالياً.")
-            return
-
-        keyboard = []
-        # بناء أزرار الأحياء (صفين في كل سطر)
-        for i in range(0, len(districts), 2):
-            row = []
-            dist1 = districts[i]
-            # نستخدم بادئة searchdist_ التي يعالجها البوت
-            row.append(InlineKeyboardButton(dist1, callback_data=f"searchdist_{dist1}"))
-            if i + 1 < len(districts):
-                dist2 = districts[i+1]
-                row.append(InlineKeyboardButton(dist2, callback_data=f"searchdist_{dist2}"))
-            keyboard.append(row)
-
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="main_menu")])
-        
-        await query.edit_message_text(
-            "📍 **أحياء المدينة المنورة:**\nاختر الحي الذي تود البحث فيه عن كابتن:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    # 2. عند اختيار حي محدد للبحث عن كابتن
-    elif data.startswith("searchdist_"):
-        # استخراج اسم الحي من الـ callback
-        target_dist = data.replace("searchdist_", "")
-        
-        await sync_all_users() # تحديث قائمة الكباتن من القاعدة
-        
-        def clean(t): 
-            return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace(" ", "").strip()
-        
-        target_clean = clean(target_dist)
-        matched_drivers = []
-
-        # البحث عن الكباتن الذين لديهم هذا الحي
-        for d in CACHED_DRIVERS:
-            if d.get('role') == 'driver' and d.get('districts'):
-                # تنظيف وتحويل النص المخزن (الذي يحتوي فواصل) إلى قائمة
-                d_dists = [clean(x) for x in d['districts'].replace("،", ",").split(",")]
-                if target_clean in d_dists:
-                    matched_drivers.append(d)
-
-        if not matched_drivers:
-            kb = [[InlineKeyboardButton("🌍 طلب GPS (بالموقع)", callback_data="order_general")],
-                  [InlineKeyboardButton("🔙 اختيار حي آخر", callback_data="order_by_district")]]
-            await query.edit_message_text(
-                f"⚠️ نعتذر، لا يوجد كباتن نخبة متاحين حالياً في حي **{target_dist}**.",
-                reply_markup=InlineKeyboardMarkup(kb)
-            )
-        else:
-            keyboard = []
-            for d in matched_drivers[:8]:
-                keyboard.append([InlineKeyboardButton(
-                    f"🚖 {d['name']} ({d.get('car_info', 'سيارة')})", 
-                    callback_data=f"book_{d['user_id']}_{target_dist}"
-                )])
-            keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="order_by_district")])
-            
-            await query.edit_message_text(
-                f"✅ وجدنا {len(matched_drivers)} كابتن متاحين في {target_dist}:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-
-    # ===============================================================
-    # [C] عمليات الحجز والقبول (Logic)
-    # ===============================================================
-    
-    # ===============================================================
-    # 1. القائمة الرئيسية للبحث (أقرب كابتن vs بحث بالأحياء)
-    # ===============================================================
-
-    # --- خيار أ: أقرب كابتن (البحث بالموقع GPS) ---
-    if data == "order_general":
-        context.user_data['state'] = 'WAIT_GENERAL_DETAILS' 
-        await query.edit_message_text(
-            "🌍 **البحث عن أقرب كابتن (GPS):**\n\n"
-            "📝 يرجى كتابة **تفاصيل مشوارك** الآن (من وين لوين؟):",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    # --- خيار ب: كابتن نخبة (بحث باختيار المدينة والحي) ---
-    
-
-    # ===============================================================
-    # 2. التنقل داخل قائمة المدن والأحياء
-    # ===============================================================
-
-    # --- تم اختيار المدينة -> عرض الأحياء ---
-    
-
-    # --- تم اختيار الحي -> عرض الكباتن ---
-    
-    # ===============================================================
-    # 3. بدء عملية حجز كابتن محدد (Book)
-    # ===============================================================
-        
-
-    # --- منطق تبديل الأحياء ---
-        # --- 1. معالجة الضغط على اسم الحي (تبديل الحالة) ---
-    
-
-
-
-    # ===============================================================
-    # 4. قبول الكابتن للطلب (عام أو خاص)
-    # ===============================================================
-    elif data.startswith("accept_ride_") or data.startswith("accept_gen_"):
-        parts = data.split("_")
-        rider_id = int(parts[2])
-        price = float(parts[3])
-        driver_id = user_id
-        
-        # أ) التحقق من رصيد الكابتن
-        conn = get_db_connection()
-        can_accept = False
-        driver_name = "كابتن"
-        driver_car = "سيارة"
-
-        if conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT balance, name, car_info FROM users WHERE user_id = %s", (driver_id,))
-                res = cur.fetchone()
-                if res:
-                    current_bal = res[0]
-                    driver_name = res[1]
-                    driver_car = res[2]
-                    # السماح بالقبول إذا الرصيد أكبر من -5 (أو 0 حسب سياستك)
-                    if current_bal >= -5: 
-                        can_accept = True
-            conn.close()
-
-        if not can_accept:
-            await query.answer("⚠️ رصيدك غير كافٍ! يرجى شحن المحفظة.", show_alert=True)
-            return
-
-        # ب) إبلاغ الكابتن بالانتظار
-        await query.edit_message_text("⏳ تم إرسال موافقتك للعميل.. بانتظار تأكيده لفتح المحادثة.")
-
-        # ج) إرسال طلب الموافقة النهائية للراكب
-        kb_confirm = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("💬 موافقة وفتح الدردشة", callback_data=f"final_start_{driver_id}_{price}"),
-                InlineKeyboardButton("❌ رفض", callback_data=f"reject_ride_{driver_id}")
-            ]
-        ])
-
-        try:
-            await context.bot.send_message(
-                chat_id=rider_id,
-                text=(f"🎉 **تم قبول عرضك!**\n\n"
-                      f"👤 الكابتن: {driver_name}\n"
-                      f"🚗 السيارة: {driver_car}\n"
-                      f"💰 السعر المتفق عليه: {price} ريال\n\n"
-                      f"هل تود فتح المحادثة وبدء الرحلة؟"),
-                reply_markup=kb_confirm,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            await query.edit_message_text(f"❌ تعذر الوصول للعميل. قد يكون حظر البوت.")
-        return
-
-    # ===============================================================
-    # 5. الموافقة النهائية من الراكب (بدء الشات والخصم)
-    # ===============================================================
-    elif data.startswith("final_start_"):
-        parts = data.split("_")
-        driver_id = int(parts[2])
-        price = float(parts[3])
-        rider_id = user_id
-        commission = price * 0.10 # عمولة 10%
-
-        # 1. خصم العمولة من الكابتن
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
-                conn.commit()
-            conn.close()
-
-        # 2. تفعيل جلسة المحادثة
-        start_chat_session(driver_id, rider_id)
-
-        # 3. إشعار الأدمن (Log)
-        admin_msg = (
-            f"💰 **عملية ناجحة**\n"
-            f"👤 راكب: `{rider_id}` | 🚖 كابتن: `{driver_id}`\n"
-            f"💵 السعر: {price} | 📉 العمولة: {commission}"
-        )
-        for aid in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=aid, text=admin_msg, parse_mode=ParseMode.MARKDOWN)
-            except: pass
-
-        # 4. إرسال واجهة الدردشة للطرفين
-        # كيبورد يحتوي على زر مشاركة الموقع وزر إنهاء
-        kb_chat = ReplyKeyboardMarkup([
-            [KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)],
-            [KeyboardButton("❌ إنهاء المحادثة")]
-        ], resize_keyboard=True)
-
-        # رسالة للراكب (الذي ضغط الزر)
-        await query.edit_message_text("✅ تم بدء الرحلة وفتح الخط مع الكابتن.")
-        await context.bot.send_message(
-            chat_id=rider_id, 
-            text="🟢 **أنت الآن في محادثة مباشرة مع الكابتن.**\nيمكنك إرسال موقعك أو الكتابة له هنا.", 
-            reply_markup=kb_chat,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-        # رسالة للكابتن
-        try:
-            await context.bot.send_message(
-                chat_id=driver_id, 
-                text=(f"✅ **وافق العميل وبدأت الرحلة!**\n"
-                      f"تم خصم عمولة ({commission} ريال).\n"
-                      f"تحدث معه الآن للتنسيق."), 
-                reply_markup=kb_chat,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except: pass
-        return
-
-        # هذا الجزء يوضع داخل معالج الـ CallbackQuery (عند الضغط على زر الكابتن في القروب)
-    elif data.startswith("book_"):
-        parts = data.split("_")
-        driver_id = parts[1]
-        
-        # استخراج اسم الحي إذا كان موجوداً في البيانات
-        dist_name = parts[2] if len(parts) > 2 else "المحدد"
-
-        # التحقق من نوع الشات (إذا كان في القروب نحوله للبوت)
-        if update.effective_chat.type != "private":
-            bot_username = context.bot.username
-            
-            # الرابط العميق الذي يمرر ID الكابتن لـ Start Command
-            url = f"https://t.me/{bot_username}?start=order_{driver_id}"
-            
-            # الزر الذي ينقصك لإكمال الطلب
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🚀 إرسال تفاصيل المشوار والسعر", url=url)
-            ]])
-            
-            await query.edit_message_text(
-                f"📥 **لقد اخترت كابتن في حي {dist_name}**\n\n"
-                "لإكمال الطلب وحماية خصوصيتك، اضغط على الزر بالأسفل ثم اضغط (ابدأ/Start) واكتب تفاصيل مشوارك.",
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            # إذا كان المستخدم يضغط من داخل البوت أصلاً (نادر الحدوث في هذا السياق)
-            context.user_data.update({
-                'driver_to_order': driver_id,
-                'state': 'WAIT_TRIP_DETAILS'
-            })
-            await query.edit_message_text("📝 **اكتب تفاصيل مشوارك الآن:**")
-        
-        return
-
-    # ===============================================================
-    # 6. الرفض (من الكابتن أو الراكب)
-    # ===============================================================
-    elif data.startswith("reject_ride_"):
-        target_id = int(data.split("_")[2])
-        
-        await query.edit_message_text("❌ تم رفض الطلب.")
-        try:
-            await context.bot.send_message(chat_id=target_id, text="❌ عذراً، تم رفض/إلغاء الطلب من الطرف الآخر.")
-        except: pass
-        return
-
-
-    # داخل handle_callbacks
-    if data.startswith("admin_block_"):
-        target_id = int(data.split("_")[2])
-        # هنا تضع منطق الحظر في قاعدة البيانات (تحديث is_blocked = True)
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET is_blocked = TRUE WHERE user_id = %s", (target_id,))
-            conn.commit()
-        conn.close()
-        await query.answer("✅ تم حظر المستخدم بنجاح")
-        await query.edit_message_caption(caption=query.message.caption + "\n\n🚫 (تم حظر هذا العضو)")
-
-    elif data.startswith("admin_quickcash_"):
-        target_id = data.split("_")[2]
-        await query.message.reply_text(f"لشحن رصيد هذا العضو، استخدم الأمر التالي:\n`/cash {target_id} 50`")
-        await query.answer()
-
-
-    # ===============================================================
-    # 7. التوثيق (لوحة تحكم الأدمن)
-    # ===============================================================
-    elif data.startswith("verify_"):
-        # التنسيق: verify_ok_ID أو verify_no_ID
-        parts = data.split("_")
-        action = parts[1]
-        target_uid = int(parts[2])
-        is_verified = (action == "ok")
-
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET is_verified = %s WHERE user_id = %s", (is_verified, target_uid))
-            conn.commit()
-        conn.close()
-
-        status_text = "✅ موثق" if is_verified else "❌ مرفوض"
-        await query.edit_message_text(f"تم تحديث حالة المستخدم {target_uid} إلى: {status_text}")
-        
-        # إشعار المستخدم
-        msg = "🎉 تهانينا! تم توثيق حسابك ككابتن." if is_verified else "❌ تم رفض طلب توثيق حسابك. تواصل مع الإدارة."
-        try:
-            await context.bot.send_message(chat_id=target_uid, text=msg)
-        except: pass
-        
-        # تحديث الكاش
-        try:
-            markup = get_main_kb('driver', is_verified) # نرسل الكيبورد بناءً على الحالة الجديدة
-            await context.bot.send_message(chat_id=target_uid, text=msg, reply_markup=markup)
-        except: pass
-
-        # 🔥 تحديث الكاش فوراً وإجباري
-        await sync_all_users(force=True) 
-        return
 
 
 
