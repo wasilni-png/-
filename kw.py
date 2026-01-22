@@ -2063,19 +2063,56 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user = update.effective_user
-    text = update.message.text.lower()
-    msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+    text = update.message.text
+    # توحيد الحروف للبحث الذكي
+    msg_clean = text.lower().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-    # 1. منع الطلبات الشهرية وتحويلها للأدمن
+    # 1. فحص الكلمات الممنوعة (الطلبات الشهرية)
     FORBIDDEN = ["شهري", "عقد", "راتب", "دوام"]
     if any(k in msg_clean for k in FORBIDDEN):
-        sender_info = (f"⚠️ **طلب شهري جديد:**\n\n👤 {user.full_name}\n🆔 @{user.username}\n💬 {text}")
+        
+        # إنشاء رابط التواصل (حتى لو لم يكن لديه يوزر نيم)
+        contact_url = f"https://t.me/{user.username}" if user.username else f"tg://user?id={user.id}"
+        mention = f"@{user.username}" if user.username else "لا يوجد معرف"
+
+        # تنسيق رسالة الإدارة
+        admin_info = (
+            f"📋 **طلب شهري محول للأدمن**\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"👤 **الاسم:** {user.full_name}\n"
+            f"🆔 **المعرف:** {mention}\n"
+            f"💬 **الطلب:**\n_{text}_"
+        )
+
+        # إضافة زر شفاف للأدمن لسهولة التواصل
+        admin_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💬 مراسلة العضو", url=contact_url)]
+        ])
+
+        # إرسال التقرير لكل الأدمن
         for admin_id in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=admin_id, text=sender_info)
-            except: pass
-        try: await update.message.delete()
-        except: pass
-        await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة، تم تحويل طلبك للإدارة.")
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_info,
+                    reply_markup=admin_kb,
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+
+        # الرد على العضو في المجموعة (يجب أن يتم قبل الحذف)
+        try:
+            await update.message.reply_text(f"✅ أبشر يا {user.first_name}، تم تحويل طلبك للإدارة وسيتم التواصل معك.")
+        except:
+            pass
+
+        # حذف رسالة العضو الأصلية
+        try:
+            await update.message.delete()
+        except Exception as e:
+            print(f"فشل حذف الرسالة: {e}")
+            
         return
 
     # 2. تحديد الكلمات المفتاحية للطلب
