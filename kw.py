@@ -202,6 +202,25 @@ def update_db_location(user_id, lat, lon):
     finally:
         conn.close()
 
+def deduct_commission(driver_id, price):
+    commission = price * 0.15  # حساب 15%
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # تحديث رصيد السائق بخصم العمولة
+                cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (commission, driver_id))
+                conn.commit()
+            return commission
+        except Exception as e:
+            print(f"Error deducting commission: {e}")
+            return 0
+        finally:
+            conn.close()
+    return 0
+
+
+
 def update_districts_in_db(user_id, districts_str):
     """تحديث عمود الأحياء في سوبابيز"""
     conn = get_db_connection()
@@ -584,26 +603,55 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_kb('driver', user_info.get('is_verified', True))
         )
 
-    elif data.startswith("final_start_"):
+        elif data.startswith("final_start_"):
         parts = data.split("_")
         driver_id = int(parts[2])
         price = float(parts[3])
-        rider_id = user_id # الراكب هو من ضغط الزر هنا
-        
-        # 1. فتح جلسة الشات
-        start_chat_session(driver_id, rider_id)
-        
-        # 2. خصم العمولة من الكابتن (مثلاً 2 ريال أو نسبة)
-        # deduct_commission_by_percent(driver_id, price) 
+        rider_id = user_id # الراكب هو من ضغط الزر
 
-        # 3. إشعار الطرفين ببدء الشات
-        kb_chat = ReplyKeyboardMarkup([
-            [KeyboardButton("📍 مشاركة موقعي", request_location=True)],
+        # 1. جلب بيانات الطرفين من الكاش
+        await sync_all_users()
+        driver_info = USER_CACHE.get(driver_id)
+        rider_info = USER_CACHE.get(rider_id)
+
+        # 2. خصم العمولة (15%)
+        commission_amount = deduct_commission(driver_id, price)
+
+        # 3. إشعار الأدمن بكامل التفاصيل
+        admin_msg = (
+            f"🚕 **تقرير رحلة جديدة**\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"👤 **الراكب:** {rider_info['name']} (`{rider_id}`)\n"
+            f"👨‍✈️ **السائق:** {driver_info['name']} (`{driver_id}`)\n"
+            f"🚗 **السيارة:** {driver_info.get('car_info', 'غير مسجلة')}\n"
+            f"💰 **سعر الرحلة:** {price} ريال\n"
+            f"📉 **العمولة المخصومة (15%):** {commission_amount:.2f} ريال\n"
+            f"📅 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            print(f"Admin notification failed: {e}")
+
+        # 4. فتح جلسة الشات بين الطرفين
+        start_chat_session(driver_id, rider_id)
+
+        # 5. إشعار الطرفين ببدء التواصل
+        chat_kb = ReplyKeyboardMarkup([
+            [KeyboardButton("📍 مشاركة الموقع", request_location=True)],
             [KeyboardButton("❌ إنهاء المحادثة")]
         ], resize_keyboard=True)
 
-        await query.edit_message_text("✅ تم بدء الرحلة. يمكنك التحدث مع الكابتن الآن.")
-        await context.bot.send_message(chat_id=driver_id, text="✅ الراكب أكد الرحلة! يمكنك التحدث معه الآن.", reply_markup=kb_chat)
+        # رسالة للراكب
+        await query.edit_message_text(f"✅ تم تأكيد الرحلة وخصم الرسوم.\nيمكنك الآن مراسلة الكابتن {driver_info['name']}.")
+        
+        # رسالة للسائق
+        await context.bot.send_message(
+            chat_id=driver_id, 
+            text=f"✅ الراكب أكد الرحلة!\nتم خصم عمولة {commission_amount:.2f} ريال.\nيمكنك الآن التحدث معه.",
+            reply_markup=chat_kb
+        )
+
 
     # --- [5] قسم قبول الرحلات (للسائق) ---
         # ===============================================================
