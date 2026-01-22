@@ -336,22 +336,79 @@ def get_main_kb(role, is_verified=True):
     ], resize_keyboard=True)
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
+# ---------------------------------------------------------
+# 1. دالة التسجيل التلقائي (الذكية)
+# ---------------------------------------------------------
+async def auto_register_rider(update: Update):
+    """
+    تقوم بتسجيل المستخدم كراكب تلقائياً في Supabase وتحديث الكاش المحلي.
+    """
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    first_name = update.effective_user.first_name
+    last_name = update.effective_user.last_name or ""
+    full_name = f"{first_name} {last_name}".strip()
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # استخدام ON CONFLICT لضمان عدم حدوث خطأ إذا كان المستخدم موجوداً
+                # وتحديث chat_id لضمان التواصل المستقبلي
+                cur.execute("""
+                    INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) 
+                    DO UPDATE SET chat_id = EXCLUDED.chat_id
+                """, (user_id, chat_id, 'rider', full_name, '0000000000', True))
+                conn.commit()
+            
+            # 🔥 تحديث الذاكرة المؤقتة (Cache) فوراً
+            # هذا يمنع البوت من طلب التسجيل مرة أخرى في نفس اللحظة
+            USER_CACHE[user_id] = {
+                'user_id': user_id,
+                'chat_id': chat_id,
+                'role': 'rider',
+                'name': full_name,
+                'is_verified': True,
+                'districts': "",
+                'balance': 0.0
+            }
+            print(f"✅ [System] تم التسجيل التلقائي للراكب: {full_name}")
+            
+        except Exception as e:
+            print(f"❌ خطأ التسجيل التلقائي: {e}")
+        finally:
+            conn.close()
+    else:
+        print("⚠️ فشل الاتصال بقاعدة البيانات")
 
-
-
-
+# ---------------------------------------------------------
+# 2. دالة البداية (Start Command)
+# ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
 
-    # 1. تنظيف الذاكرة لضمان بداية جديدة
+    # 1. تنظيف الذاكرة لضمان بداية نظيفة
     context.user_data.clear()
 
-    # 2. فحص المعاملات القادمة من الروابط (Deep Linking)
+    # 2. تحديث البيانات والتحقق من وجود المستخدم
+    await sync_all_users()
+    user = USER_CACHE.get(user_id)
+
+    # 3. معالجة الروابط القادمة (Deep Linking)
     if context.args:
         arg_value = context.args[0]
 
-        # --- حالة (sd_): معالجة ضغطة الحي من القروب ---
+        # [أ] التسجيل التلقائي للروابط الخدمية (طلب مشوار، حي، أو تسجيل راكب)
+        # إذا لم يكن المستخدم موجوداً، نسجله فوراً
+        needs_auto_reg = arg_value.startswith(("sd_", "order_", "reg_rider"))
+        if needs_auto_reg and not user:
+            await auto_register_rider(update)
+            user = USER_CACHE.get(user_id) # تحديث المتغير المحلي بعد التسجيل
+
+        # --- الحالة 1: (sd_) معالجة رابط الحي من القروب ---
         if arg_value.startswith("sd_"):
             try:
                 index = int(arg_value.split("_")[1])
@@ -359,11 +416,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if index < len(districts):
                     selected_dist = districts[index]
-                    await sync_all_users()
                     
-                    def clean(t): 
-                        return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
-                    
+                    # تنظيف النص للمقارنة
+                    def clean(t): return t.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
                     target_clean = clean(selected_dist)
 
                     matched = [
@@ -372,31 +427,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
 
                     if matched:
+                        # عرض الكباتن المتاحين
                         kb = [[InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")] for d in matched[:6]]
                         await update.message.reply_text(
                             f"✅ وجدنا كباتن في حي **{selected_dist}**:\nاختر الكابتن لبدء المحادثة:", 
-                            reply_markup=InlineKeyboardMarkup(kb)
+                            reply_markup=InlineKeyboardMarkup(kb),
+                            parse_mode=ParseMode.MARKDOWN
                         )
                     else:
+                        # لا يوجد كباتن
                         await update.message.reply_text(
                             f"📍 حي {selected_dist} لا يوجد به كباتن حالياً، جرب طلب مشوار عام بالـ GPS.", 
                             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 طلب GPS", callback_data="order_general")]])
                         )
                 return 
             except Exception as e:
-                print(f"Error in sd_ deep link: {e}")
+                print(f"Error in sd_ link: {e}")
 
-        # --- حالة (reg_rider): التسجيل المباشر كراكب ---
-        elif arg_value == "reg_rider":
-            await auto_register_rider(update) 
-            await update.message.reply_text(
-                f"🎉 **حياك الله يا {first_name}!**\nتم تسجيل دخولك كراكب بنجاح.\nيمكنك الآن طلب المشاوير بسهولة.",
-                reply_markup=get_main_kb('rider', True),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
-        # --- حالة (reg_driver): التسجيل ككابتن ---
+        # --- الحالة 2: (reg_driver) تسجيل سائق جديد ---
         elif arg_value == "reg_driver":
             context.user_data['reg_role'] = 'driver'
             context.user_data['state'] = 'WAIT_NAME'
@@ -408,21 +456,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
             return
 
-        # --- حالة (order_ID): طلب مشوار من كابتن محدد ---
+        # --- الحالة 3: (order_ID) طلب مشوار من كابتن محدد ---
         elif arg_value.startswith("order_") and arg_value != "order_general":
             try:
                 driver_id = arg_value.split("_")[1]
-                await sync_all_users()
-                if user_id not in USER_CACHE:
-                    await auto_register_rider(update)
-
+                
                 context.user_data.update({
                     'driver_to_order': driver_id,
                     'state': 'WAIT_TRIP_DETAILS'
                 })
 
                 await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}\n📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
+                    f"👋 أهلاً بك يا {first_name}\n\n"
+                    f"📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                    f"(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
                     reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -430,29 +477,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error in order_ ID: {e}")
 
-        # --- حالة (order_general): الطلب العام ---
-        elif arg_value == "order_general":
-            await sync_all_users()
-            if user_id not in USER_CACHE:
-                await auto_register_rider(update)
+        # --- الحالة 4: (order_general) أو (reg_rider) ---
+        elif arg_value == "order_general" or arg_value == "reg_rider":
+            # إذا كان الرابط reg_rider فقط، نكتفي بالرسالة الترحيبية في الأسفل
+            if arg_value == "order_general":
+                context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
+                await update.message.reply_text(
+                    "🌍 **بدء طلب مشوار عام (عبر GPS)**\n\n📝 اكتب تفاصيل مشوارك الآن (الوجهة والوقت):",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
 
-            context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
-            await update.message.reply_text(
-                "🌍 **بدء طلب مشوار عام (عبر GPS)**\n\n📝 اكتب تفاصيل مشوارك الآن (الوجهة والوقت):",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
-    # 3. المسار الطبيعي (الدخول اليدوي للبوت بدون روابط)
-    await sync_all_users()
-    user = USER_CACHE.get(user_id)
+    # 4. المسار الطبيعي (بدون روابط أو بعد انتهاء التسجيل التلقائي)
     if user:
+        # المستخدم مسجل (سواء قديماً أو تم تسجيله تلقائياً الآن)
+        role_txt = "الكابتن" if user['role'] == 'driver' else "الراكب"
         await update.message.reply_text(
-            f"أهلاً بك مجدداً {user['name']}", 
-            reply_markup=get_main_kb(user['role'], user['is_verified'])
+            f"👋 مرحباً بك مجدداً {role_txt} **{user['name']}**", 
+            reply_markup=get_main_kb(user['role'], user['is_verified']),
+            parse_mode=ParseMode.MARKDOWN
         )
     else:
+        # مستخدم جديد دخل يدوياً للبوت (بدون رابط)
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👤 تسجيل راكب", callback_data="reg_rider"),
              InlineKeyboardButton("🚗 تسجيل كابتن", callback_data="reg_driver")]
@@ -462,91 +509,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb
         )
 
-# دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
-async def auto_register_rider(update):
-    user_id = update.effective_user.id
-    full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
-    conn = get_db_connection()
-    if conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO NOTHING
-            """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
-            conn.commit()
-        conn.close()
-        await sync_all_users(force=True)
 
 
-
-        # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
-                # 3. حالة طلب مشوار محدد (من إعلانات الكباتن في القروب)
-    elif arg_value.startswith("order_"):
-            try:
-                # استخراج ID الكابتن فقط (لأن الحي لم نعد نطلبه في الرابط)
-                driver_id = arg_value.split("_")[1]
-
-                # --- [جديد] التسجيل التلقائي للراكب إذا لم يكن مسجلاً ---
-                await sync_all_users()
-                if user_id not in USER_CACHE:
-                    conn = get_db_connection()
-                    if conn:
-                        with conn.cursor() as cur:
-                            full_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
-                            cur.execute("""
-                                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (user_id) DO NOTHING
-                            """, (user_id, update.effective_chat.id, 'rider', full_name, '0000000000', True))
-                            conn.commit()
-                        conn.close()
-                        await sync_all_users(force=True) # تحديث الذاكرة فوراً
-
-                # --- [جديد] التحويل المباشر لطلب التفاصيل ---
-                context.user_data.update({
-                    'driver_to_order': driver_id,
-                    'state': 'WAIT_TRIP_DETAILS'
-                })
-
-                await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}\n"
-                    "لقد اخترت كابتن من القروب.\n\n"
-                    "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-                    "(مثال: من الراشد مول إلى الحرم، الوقت 9 مساءً)",
-                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return 
-
-            except Exception as e:
-                print(f"Deep Link Error: {e}")
-                await update.message.reply_text("⚠️ حدث خطأ في الرابط، يرجى المحاولة من القروب مجدداً.")
-                return
-
-    # ب) المسار العادي (بدون روابط) - فحص قاعدة البيانات
-    await sync_all_users() # تأكد أن هذه الدالة موجودة لديك
-    user = USER_CACHE.get(user_id)
-
-    if user:
-        # المستخدم مسجل مسبقاً -> عرض القائمة الرئيسية
-        role_txt = "الكابتن" if user['role'] == 'driver' else "الراكب"
-        await update.message.reply_text(
-            f"👋 مرحباً بك مجدداً {role_txt} **{user['name']}**", 
-            reply_markup=get_main_kb(user['role'], user['is_verified']),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    else:
-        # مستخدم جديد (دخل بشكل يدوي) -> عرض خيارات التسجيل
-        welcome_new = (
-            f"👋 مرحباً بك يا **{first_name}** في بوت التوصيل!\n\n"
-            "أنت غير مسجل لدينا، اختر نوع الحساب للبدء:"
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
-             InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
-        ])
-        await update.message.reply_text(welcome_new, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 
 # --- التسجيل ---
