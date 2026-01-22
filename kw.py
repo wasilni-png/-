@@ -223,29 +223,49 @@ def update_districts_in_db(user_id, districts_str):
 
 
 
-async def sync_all_users(force=False): # أضفنا force=False
-    """تحديث الذاكرة المؤقتة من قاعدة البيانات"""
-    global USER_CACHE, CACHED_DRIVERS, LAST_CACHE_SYNC
+async def sync_all_users(force=False):
+    """
+    تقوم هذه الدالة بجلب بيانات الكباتن الموثقين فقط من قاعدة البيانات
+    وتخزين أحياء عملهم في الذاكرة لتسريع عملية البحث للركاب.
+    """
+    global CACHED_DRIVERS
     
-    # إذا لم يكن طلباً إجبارياً، نتحقق من مرور دقيقتين
-    if not force:
-        if (datetime.now() - LAST_CACHE_SYNC).total_seconds() < 120:
-            return
+    # تجنب التحديث المستمر إذا لم نطلب "فرض التحديث" (لتوفير موارد السيرفر)
+    if not force and len(CACHED_DRIVERS) > 0:
+        return
 
     conn = get_db_connection()
-    if not conn: return
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM users")
-            all_users = cur.fetchall()
-
-            USER_CACHE = {u['user_id']: u for u in all_users}
-            CACHED_DRIVERS = [u for u in all_users if u['role'] == 'driver']
-
-            LAST_CACHE_SYNC = datetime.now()
-    finally:
-        conn.close()
-
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # نجلب فقط الكباتن الموثقين والذين لديهم أحياء عمل
+                query = """
+                SELECT user_id, name, car_info, districts, balance, role, is_verified 
+                FROM users 
+                WHERE role = 'driver' AND is_verified = TRUE AND is_blocked = FALSE
+                """
+                cur.execute(query)
+                rows = cur.fetchall()
+                
+                temp_list = []
+                for row in rows:
+                    temp_list.append({
+                        'user_id': row[0],
+                        'name': row[1],
+                        'car_info': row[2],
+                        'districts': row[3] if row[3] else "", # نص الأحياء (حي1، حي2...)
+                        'balance': row[4],
+                        'role': row[5],
+                        'is_verified': row[6]
+                    })
+                
+                CACHED_DRIVERS = temp_list
+                # print(f"🔄 تم تحديث الكاش بنجاح: {len(CACHED_DRIVERS)} كابتن جاهز.")
+                
+        except Exception as e:
+            print(f"❌ خطأ أثناء مزامنة الكاش: {e}")
+        finally:
+            conn.close()
 
 # --- دوال الدردشة الوسيطة ---
 
@@ -1965,6 +1985,7 @@ def main():
 
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنظام المجموعات (0 -> 4) بنجاح...")
+    await sync_all_users(force=True)
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
