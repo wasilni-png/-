@@ -226,47 +226,82 @@ def update_districts_in_db(user_id, districts_str):
 
 async def sync_all_users(force=False):
     """
-    تقوم هذه الدالة بجلب بيانات الكباتن الموثقين فقط من قاعدة البيانات
-    وتخزين أحياء عملهم في الذاكرة لتسريع عملية البحث للركاب.
+    تحديث شامل لبيانات السائقين (للإعلانات) والمستخدمين (للتحقق من الهوية) من Supabase.
     """
-    global CACHED_DRIVERS
+    global CACHED_DRIVERS, USER_CACHE
     
-    # تجنب التحديث المستمر إذا لم نطلب "فرض التحديث" (لتوفير موارد السيرفر)
-    if not force and len(CACHED_DRIVERS) > 0:
+    # تحسين: إذا كانت البيانات موجودة ولا يوجد أمر فرض تحديث، نخرج لتوفير الموارد
+    if not force and len(USER_CACHE) > 0:
         return
 
     conn = get_db_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                # نجلب فقط الكباتن الموثقين والذين لديهم أحياء عمل
-                query = """
-                SELECT user_id, name, car_info, districts, balance, role, is_verified 
+    if not conn:
+        return
+
+    try:
+        with conn.cursor() as cur:
+            # 1. جلب كافة المستخدمين لتحديث USER_CACHE (للتحقق من التسجيل)
+            cur.execute("SELECT user_id, role, name, is_verified, chat_id FROM users WHERE is_blocked = FALSE")
+            all_rows = cur.fetchall()
+            
+            temp_user_cache = {}
+            temp_drivers_list = []
+
+            for row in all_rows:
+                u_id = row[0]
+                u_data = {
+                    'user_id': u_id,
+                    'role': row[1],
+                    'name': row[2],
+                    'is_verified': row[3],
+                    'chat_id': row[4]
+                }
+                # إضافة للقاموس العام (للتعرف على المستخدم فور دخوله)
+                temp_user_cache[u_id] = u_data
+                
+                # 2. إذا كان الشخص سائقاً وموثقاً، نجلب بياناته الإضافية للكاش الخاص بالبحث
+                if u_data['role'] == 'driver' and u_data['is_verified']:
+                    # استعلام إضافي أو تعديل الاستعلام الرئيسي لجلب districts و car_info
+                    # هنا سنعتمد على استعلام واحد شامل لتوفير الوقت:
+                    pass 
+
+            # تحديث الاستعلام ليكون شاملاً لكل شيء مرة واحدة
+            cur.execute("""
+                SELECT user_id, role, name, is_verified, chat_id, districts, car_info, balance 
                 FROM users 
-                WHERE role = 'driver' AND is_verified = TRUE AND is_blocked = FALSE
-                """
-                cur.execute(query)
-                rows = cur.fetchall()
+                WHERE is_blocked = FALSE
+            """)
+            full_data = cur.fetchall()
+            
+            # إعادة التعبئة النهائية
+            temp_user_cache = {}
+            temp_drivers_list = []
+            
+            for r in full_data:
+                user_id = r[0]
+                role = r[1]
+                data = {
+                    'user_id': user_id, 'role': role, 'name': r[2],
+                    'is_verified': r[3], 'chat_id': r[4], 
+                    'districts': r[5] if r[5] else "", 
+                    'car_info': r[6] if r[6] else "",
+                    'balance': r[7]
+                }
                 
-                temp_list = []
-                for row in rows:
-                    temp_list.append({
-                        'user_id': row[0],
-                        'name': row[1],
-                        'car_info': row[2],
-                        'districts': row[3] if row[3] else "", # نص الأحياء (حي1، حي2...)
-                        'balance': row[4],
-                        'role': row[5],
-                        'is_verified': row[6]
-                    })
+                temp_user_cache[user_id] = data
                 
-                CACHED_DRIVERS = temp_list
-                # print(f"🔄 تم تحديث الكاش بنجاح: {len(CACHED_DRIVERS)} كابتن جاهز.")
-                
-        except Exception as e:
-            print(f"❌ خطأ أثناء مزامنة الكاش: {e}")
-        finally:
-            conn.close()
+                # قائمة السائقين النشطين فقط (التي تظهر في البحث)
+                if role == 'driver' and r[3] == True:
+                    temp_drivers_list.append(data)
+
+            # تحديث المتغيرات العالمية
+            USER_CACHE = temp_user_cache
+            CACHED_DRIVERS = temp_drivers_list
+            
+    except Exception as e:
+        print(f"❌ خطأ أثناء مزامنة الكاش من Supabase: {e}")
+    finally:
+        conn.close()
 
 # --- دوال الدردشة الوسيطة ---
 
