@@ -202,8 +202,11 @@ def update_db_location(user_id, lat, lon):
         print(f"Error updating location for {user_id}: {e}")
     finally:
         conn.close()
-def deduct_commission(driver_id, amount):
-    """تخصم العمولة من رصيد الكابتن في سوبابيز"""
+def deduct_commission_by_percent(driver_id, trip_price):
+    """تخصم نسبة 15% من قيمة المشوار من رصيد الكابتن"""
+    # حساب العمولة (15%)
+    commission = float(trip_price) * 0.15
+    
     conn = get_db_connection()
     if conn:
         try:
@@ -212,15 +215,16 @@ def deduct_commission(driver_id, amount):
                     UPDATE users 
                     SET balance = balance - %s 
                     WHERE user_id = %s AND role = 'driver'
-                """, (amount, driver_id))
+                """, (commission, driver_id))
                 conn.commit()
-                return True
+                return commission # نرجع قيمة العمولة لنخبر بها الكابتن
         except Exception as e:
             print(f"❌ خطأ في خصم العمولة: {e}")
-            return False
+            return None
         finally:
             conn.close()
-    return False
+    return None
+
 
 def update_districts_in_db(user_id, districts_str):
     """تحديث عمود الأحياء في سوبابيز"""
@@ -1926,12 +1930,7 @@ def main():
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    async def post_init(application):
-        print("🔄 جاري تحديث بيانات الكباتن والأحياء...")
-        await sync_all_users(force=True)
-
-    # ربط الدالة بالبوت
-    application.post_init = post_init
+    
 
     
     # ---------------------------------------------------------
