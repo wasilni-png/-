@@ -1896,12 +1896,6 @@ async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
 
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is Running!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 def main():
