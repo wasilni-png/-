@@ -202,6 +202,25 @@ def update_db_location(user_id, lat, lon):
         print(f"Error updating location for {user_id}: {e}")
     finally:
         conn.close()
+def deduct_commission(driver_id, amount):
+    """تخصم العمولة من رصيد الكابتن في سوبابيز"""
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE users 
+                    SET balance = balance - %s 
+                    WHERE user_id = %s AND role = 'driver'
+                """, (amount, driver_id))
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"❌ خطأ في خصم العمولة: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
 
 def update_districts_in_db(user_id, districts_str):
     """تحديث عمود الأحياء في سوبابيز"""
@@ -1054,38 +1073,41 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
 async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # 1. إنهاء الجلسة في قاعدة البيانات وجلب آيدي الطرف الآخر
-    partner_id = end_chat_session(user_id)
-    
-    # 2. تنظيف ذاكرة البوت للمستخدم الحالي
-    context.user_data.clear()
-    
-    # 3. جلب بيانات المستخدم لتحديد الكيبورد المناسب (سائق أم راكب)
+    # جلب بيانات المستخدم قبل إنهاء الجلسة لمعرفة هل هو سائق؟
     await sync_all_users()
     user = USER_CACHE.get(user_id)
+    
+    # --- [إضافة نظام الخصم] ---
+    if user and user['role'] == 'driver':
+        commission_amount = 2.0  # حدد مبلغ العمولة الثابت هنا
+        if deduct_commission(user_id, commission_amount):
+            await update.message.reply_text(f"💰 تم خصم {commission_amount} ريال عمولة المشوار من رصيدك.")
+    # --------------------------
+
+    # إنهاء الجلسة في قاعدة البيانات
+    partner_id = end_chat_session(user_id)
+    context.user_data.clear()
+    
     role = user['role'] if user else 'rider'
     is_v = user.get('is_verified', True) if user else True
     
-    # 4. إرسال رسالة التأكيد والعودة للقائمة الرئيسية
     await update.message.reply_text(
         "🛑 تم إنهاء المحادثة والعودة للقائمة الرئيسية.",
         reply_markup=get_main_kb(role, is_v)
     )
 
-    # 5. إبلاغ الطرف الآخر إذا كان موجوداً
     if partner_id:
         try:
             p_user = USER_CACHE.get(partner_id)
             p_role = p_user['role'] if p_user else 'rider'
             p_v = p_user.get('is_verified', True) if p_user else True
-            
             await context.bot.send_message(
                 chat_id=partner_id,
                 text="🛑 قام الطرف الآخر بإنهاء المحادثة.",
                 reply_markup=get_main_kb(p_role, p_v)
             )
-        except Exception as e:
-            print(f"Error notifying partner: {e}")
+        except: pass
+
 
 # --- المعالج الشامل (Global Handler) ---
 
