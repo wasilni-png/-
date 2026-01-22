@@ -2370,13 +2370,13 @@ def main():
     # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
     # ---------------------------------------------------------
 
-application.add_handler(MessageHandler(
+    application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         handle_ride_order_flow
     ), group=2)
 
     # أضف هذا السطر هنا لمعالجة استلام الموقع الجغرافي للرحلة
-        application.add_handler(MessageHandler(
+    application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.LOCATION, 
         handle_location_receipt
     ), group=2)
