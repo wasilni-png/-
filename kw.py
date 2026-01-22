@@ -652,6 +652,12 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=chat_kb
         )
 
+    elif data == "order_general":
+        context.user_data['state'] = "WAITING_DETAILS"
+        await query.answer()
+        await query.edit_message_text("📝 يرجى كتابة تفاصيل المشوار:")
+
+
 
     # --- [5] قسم قبول الرحلات (للسائق) ---
         # ===============================================================
@@ -939,6 +945,56 @@ async def process_accept_ride(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error notifying rider: {e}")
         await query.edit_message_text("❌ تعذر إرسال الإشعار للراكب (ربما قام بحظر البوت).")
 
+
+async def handle_ride_order_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # نتحقق من حالة المستخدم الحالية
+    state = context.user_data.get('state')
+    text = update.message.text
+    user_id = update.effective_user.id
+
+    # 1. استلام تفاصيل المشوار
+    if state == "WAITING_DETAILS":
+        context.user_data['search_district'] = text # حفظ التفاصيل
+        context.user_data['state'] = "WAITING_PRICE"
+        await update.message.reply_text("💰 **الخطوة [2/3]:** كم السعر الذي تعرضه لهذا المشوار؟")
+
+    # 2. استلام السعر
+    elif state == "WAITING_PRICE":
+        if not text.isdigit():
+            await update.message.reply_text("⚠️ يرجى إرسال السعر كأرقام فقط (مثلاً: 40).")
+            return
+            
+        context.user_data['order_price'] = text # حفظ السعر
+        context.user_data['state'] = "WAITING_LOCATION"
+        
+        # إنشاء زر طلب الموقع
+        kb = ReplyKeyboardMarkup([
+            [KeyboardButton("📍 إرسال موقعي الآن لبدء البحث", request_location=True)]
+        ], resize_keyboard=True, one_time_keyboard=True)
+        
+        await update.message.reply_text("📍 **الخطوة [3/3]:** أخيراً، يرجى إرسال موقعك للبحث عن أقرب كابتن:", reply_markup=kb)
+
+    # إذا لم يكن هناك حالة، لا نفعل شيئاً (دردشة عادية)
+
+async def handle_location_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.location and context.user_data.get('state') == "WAITING_LOCATION":
+        # حفظ الإحداثيات
+        context.user_data['lat'] = update.message.location.latitude
+        context.user_data['lon'] = update.message.location.longitude
+        
+        await update.message.reply_text("🔍 جاري البحث عن كباتن في نطاق 5 كم وإرسال طلبك...")
+
+        # استدعاء دالة البث الخاصة بك التي قمت بتعريفها سابقاً
+        # ملاحظة: تأكد أن اسم الدالة هو broadcast_general_order
+        drivers_count = await broadcast_general_order(update, context)
+
+        if drivers_count > 0:
+            await update.message.reply_text(f"✅ تم إرسال طلبك إلى {drivers_count} كابتن قريب منك. انتظر قبول أحدهم.")
+        else:
+            await update.message.reply_text("⚠️ عذراً، لم نجد كباتن متاحين حالياً في نطاق 5 كم حول موقعك.")
+
+        # مسح الحالة لإنهاء التسلسل
+        context.user_data['state'] = None
 
 
 # --- طلب الرحلات ---
@@ -2313,6 +2369,18 @@ def main():
     # ---------------------------------------------------------
     # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
     # ---------------------------------------------------------
+
+application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
+        handle_ride_order_flow
+    ), group=2)
+
+    # أضف هذا السطر هنا لمعالجة استلام الموقع الجغرافي للرحلة
+        application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.LOCATION, 
+        handle_location_receipt
+    ), group=2)
+
     # ملاحظة: تم رفع الـ global_handler قبل الـ relay لضمان عمل التسجيل
     application.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
