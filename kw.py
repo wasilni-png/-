@@ -1911,6 +1911,14 @@ def main():
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
+    async def post_init(application):
+        print("🔄 جاري تحديث بيانات الكباتن والأحياء...")
+        await sync_all_users(force=True)
+
+    # ربط الدالة بالبوت
+    application.post_init = post_init
+
+    
     # ---------------------------------------------------------
     # المجموعة 0: الأوامر والعمليات الفورية (أولوية مطلقة)
     # ---------------------------------------------------------
@@ -1983,12 +1991,7 @@ def main():
     application.add_handler(MessageHandler(filters.LOCATION, location_handler), group=4)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, group_order_scanner), group=4)
     
-async def post_init(application: Application):
-        print("🔄 جاري تحديث بيانات الكباتن والأحياء...")
-        await sync_all_users(force=True)
 
-    # نربط دالة التحديث بالبوت لتعمل عند التشغيل
-    application.post_init = post_init
     # 3. بدء التشغيل
     print("🚀 البوت يعمل الآن بنظام المجموعات (0 -> 4) بنجاح...")
 
