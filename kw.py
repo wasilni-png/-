@@ -502,6 +502,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error in sd_ link: {e}")
 
+        # --- حالة (reg_driver): تسجيل كابتن جديد ---
+        elif arg == "reg_driver":
+            # 1. تسجيل مبدئي في القاعدة (إذا لم يكن موجوداً) لمنع الضياع
+            await auto_pre_register_driver(update) 
+            
+            # 2. بدء محادثة جمع البيانات
+            context.user_data.update({'reg_role': 'driver', 'state': 'WAIT_NAME'})
+            await update.message.reply_text(
+                "🚗 **أهلاً بك يا كابتن!**\n\n"
+                "تم فتح ملف تعريف لك. لإظهارك للركاب، نحتاج لاسمك الثلاثي أولاً.\n"
+                "📝 **يرجى كتابة اسمك الآن:**",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
         # --- الحالة 2: (reg_driver) تسجيل سائق جديد ---
         elif arg_value == "reg_driver":
             context.user_data['reg_role'] = 'driver'
@@ -569,6 +584,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+async def auto_pre_register_driver(update):
+    user_id = update.effective_user.id
+    full_name = update.effective_user.full_name
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # نسجله ككابتن (غير موثق حالياً False) برصيد صفر
+                cur.execute("""
+                    INSERT INTO users (user_id, chat_id, role, name, balance, is_verified)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET role = 'driver'
+                """, (user_id, update.effective_chat.id, 'driver', full_name, 0.0, False))
+                conn.commit()
+        finally:
+            conn.close()
 
 
 # --- التسجيل ---
