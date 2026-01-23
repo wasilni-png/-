@@ -9,6 +9,8 @@ import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
 from enum import Enum
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+
 
 # مكتبات Flask والويب
 from flask import Flask
@@ -62,7 +64,7 @@ ADMIN_IDS = [8563113166, 7996171713, 7580027135, 5027690233]
 CITIES_DISTRICTS = {
     "المدينة المنورة": [
         "الإسكان", "البحر", "البدراني", "الفتح", "التلال", "الجرف", "الحزام", "الحمراء", 
-        "الخالدية", "الدويخله", "الرانوناء", "الربوة", "الشروق", "الشرق", 
+        "الخالدية", "الدويخله", "الرانونا", "الربوة", "الشروق", "الشرق", 
         "العاقول", "العريض", "العزيزية", "العنابس", "القبلتين", "المبعوث", 
         "المطار", "المغيسله", "الملك فهد", "النبلاء", "الهجرة", "باقدو", 
         "بني حارثة", "حديقة الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور"
@@ -330,6 +332,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         arg_value = context.args[0]
 
+        if arg_value == "driver_reg":
+            # 1. تحديد الحالة (انتظار الاسم)
+            context.user_data['state'] = 'WAIT_REG_NAME'
+            
+            # 2. حفظ "الدور" في الذاكرة (هذا هو السطر الناقص لديك)
+            context.user_data['reg_role'] = 'driver'
+            
+            await update.message.reply_text(
+                "🚖 **أهلاً بك يا كابتن في أسرة (ديرعك)**\n\nيرجى كتابة اسمك الثلاثي الآن للبدء في إجراءات التسجيل:",
+                reply_markup=ReplyKeyboardRemove(),
+                parse_mode="Markdown"
+            )
+            return
+        
+        
+       
         # --- حالة (sd_): معالجة ضغطة الحي من القروب ---
         if arg_value.startswith("sd_"):
             try:
@@ -784,10 +802,12 @@ async def complete_registration(update, context, name):
     phone = context.user_data.get('reg_phone', '0000000000')
 
     conn = get_db_connection()
-    if not conn: return
+    if not conn: 
+        return
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # الراكب مفعل تلقائياً، السائق يحتاج مراجعة
             is_verified = True if role == 'rider' else False
 
             cur.execute("""
@@ -801,17 +821,41 @@ async def complete_registration(update, context, name):
                 RETURNING *;
             """, (user_id, chat_id, role, name, phone, is_verified))
             conn.commit()
-            await sync_all_users()
-
+            
+        # مزامنة الكاش بعد نجاح العملية في القاعدة
+        await sync_all_users()
         context.user_data.clear()
 
-        # --- حالة الكابتن (يرسل إشعار للأدمن) ---
+        # --- معالجة مخرجات التسجيل بناءً على الدور ---
+        
         if role == 'driver':
+            # أزرار التواصل الشفافة
+            support_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💬 مراسلة الإدارة", callback_data="contact_admin_start")],
+                [InlineKeyboardButton("👤 الحساب المباشر", url="https://t.me/x3FreTx")]
+            ])
+            
+            # إرسال رسالة "قيد المراجعة" للسائق
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\nحسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!",
+                text=(
+                    f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\n"
+                    "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!\n\n"
+                    "📞 يمكنك التواصل معنا مباشرة عبر الأزرار التالية:"
+                ),
+                reply_markup=support_kb,
+                parse_mode="Markdown"
+            )
+
+            # إرسال الكيبورد الرئيسي للسائق (غير مفعل)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="📋 قائمة التحكم الخاصة بك:",
                 reply_markup=get_main_kb('driver', False)
             )
+        
+        
+
             
             # زر القبول والرفض للأدمن
             kb = InlineKeyboardMarkup([
@@ -959,7 +1003,56 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- المعالج الشامل (Global Handler) ---
 async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. التحقق المبدئي: هل يوجد رسالة؟
+    state = context.user_data.get('state')
+    text = update.message.text
+    user_id = update.effective_user.id
+
+    if state == 'WAIT_REG_NAME':
+        context.user_data['full_name'] = text
+        context.user_data['state'] = 'WAIT_REG_PHONE'
+        await update.message.reply_text(
+            f"مرحباً بك كابتن {text}،\n\nالآن يرجى **كتابة رقم هاتفك** يدوياً لإتمام التسجيل:"
+        )
+        return
+
+    # --- الخطوة 2: إذا كان البوت ينتظر الرقم (هذا هو الكود الجديد) ---
+    elif state == 'WAIT_REG_PHONE':
+        phone_number = text.strip()
+        if not phone_number.isdigit() or len(phone_number) < 8:
+            await update.message.reply_text("⚠️ يرجى إدخال رقم هاتف صحيح (أرقام فقط).")
+            return
+
+        context.user_data['reg_phone'] = phone_number
+        full_name = context.user_data.get('full_name')
+
+        # استدعاء دالة الإكمال التي ترفع البيانات لـ Supabase
+        await complete_registration(update, context, full_name)
+        return
+
+    # المرحلة 1: استلام التفاصيل والانتقال للسعر
+    if state == 'WAIT_RIDE_DETAILS':
+        context.user_data['ride_details'] = text
+        context.user_data['state'] = 'WAIT_RIDE_PRICE'
+        await update.message.reply_text("💰 **الخطوة 2 من 3**\n\nكم السعر الذي تعرضه لهذا المشوار؟")
+        return
+
+    # المرحلة 2: استلام السعر والانتقال للموقع
+    elif state == 'WAIT_RIDE_PRICE':
+        context.user_data['ride_price'] = text
+        context.user_data['state'] = 'WAIT_RIDE_LOCATION'
+        
+        # إنشاء زر طلب الموقع الحقيقي
+        kb = ReplyKeyboardMarkup([
+            [KeyboardButton("📍 مشاركة موقعي الآن للبحث", request_location=True)],
+            [KeyboardButton("❌ إلغاء الطلب")]
+        ], resize_keyboard=True, one_time_keyboard=True)
+        
+        await update.message.reply_text(
+            "🌍 **الخطوة الأخيرة: تحديد موقعك**\n\nاضغط على الزر بالأسفل لإرسال موقعك لنحدد أقرب كابتن لك:",
+            reply_markup=kb
+        )
+        return
+
     if not update.message: return
     
     # استخراج البيانات
@@ -1948,10 +2041,23 @@ async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def contact_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دالة يبدأ بها المستخدم (راكب/سائق) مراسلة الإدارة"""
     context.user_data['state'] = 'WAIT_ADMIN_MESSAGE'
-    await update.message.reply_text(
-        "📝 **أرسل رسالتك أو شكواك الآن في رسالة واحدة:**",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء المراسلة")]], resize_keyboard=True)
+    
+    # النص يجب أن يكون داخل علامات تنصيص محكمة
+    admin_text = (
+        "📝 **أرسل رسالتك أو شكواك الآن في رسالة واحدة:**\n\n"
+        "أو يمكنك التحدث مباشرة عبر الرابط التالي:\n"
+        "👤 @x3FreTx"
     )
+    
+    await update.message.reply_text(
+        text=admin_text,
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("❌ إلغاء المراسلة")]], 
+            resize_keyboard=True
+        ),
+        parse_mode="Markdown" # لتفعيل التنسيق العريض (Bold)
+    )
+
 
 
 
@@ -2188,7 +2294,7 @@ def main():
     application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
     # الحل الأبسط والأفضل: إزالة الفلتر ليتم معالجة كل شيء داخل الدالة
-    application.add_handler(CallbackQueryHandler(register_callback), group=0)
+    
 
 
 # أضف هذا داخل دالة main قبل معالجات النصوص العامة
