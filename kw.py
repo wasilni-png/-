@@ -2117,7 +2117,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 2. تعريف الكلمات المفتاحية
     # كلمات تميز "توصيل الطلبات" (مناديب)
     DELIVERY_KEYWORDS = ["طلبات", "غرض", "اغراض", "مطط
-عم", "تموينات", "بقالة", "هدية", "توصيل طلب", "توصيل اغراض"]
+عم", "تموينات", "بقالة","طلب","مول", "هدية", "توصيل طلب", "توصيل اغراض"]
     
     # (تم حذف قائمة RIDE_KEYWORDS لأننا سنرد على "الكل" الآن)
 
@@ -2151,10 +2151,10 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     InlineKeyboardButton("📱 طلب مشوار", url=f"https://t.me/{context.bot.username}?start=order_general")
                 ],
                 [
-                    InlineKeyboardButton("📋 كباتن توصيل الطلبات (الكل)", callback_data="show_all_delivery")
+                    InlineKeyboardButton("📋 كباتن توصيل الطلبات (المعتمدين من الادارة)", callback_data="show_all_delivery")
                 ],
                 [
-                    InlineKeyboardButton("🛍️ تعليمات التوصيل", callback_data="help_delivery_orders")
+                    InlineKeyboardButton("🛍️مطاعم/متاجر تعليمات التوصيل", callback_data="help_delivery_orders")
                 ]
             ])
             await update.message.reply_text(
