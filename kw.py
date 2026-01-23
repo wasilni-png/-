@@ -1476,7 +1476,24 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [A] قسم الكابتن: إعدادات المناطق (تفعيل/إلغاء)
     # ===============================================================
 
-  
+    if data == "help_delivery_orders":
+        await query.answer()  # لإخفاء علامة التحميل من الزر فوراً
+        
+        help_text = (
+            "🛍️ **طريقة طلب توصيل الطلبات:**\n\n"
+            "للعثور على مندوب توصيل معتمد في حي معين، "
+            "اكتب رسالة في الجروب تحتوي على كلمة **'طلبات'** واسم **'الحي'**.\n\n"
+            "📝 *مثال:* \n"
+            "\"محتاج توصيل طلبات في حي العزيزية\"\n\n"
+            "👇 جرب الكتابة الآن في الجروب!"
+        )
+        
+        try:
+            # نرسل الرسالة في نفس المحادثة (الجروب) كرد على الرسالة الأصلية
+            await query.message.reply_text(help_text, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Error in delivery help: {e}")
+
     elif data.startswith("toggle_dist_"):
         # استخراج اسم الحي (الذي يأتي بعد toggle_dist_)
         dist_name = data.split("_", 2)[2]
@@ -1561,6 +1578,32 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # في حال الفشل نرسل رسالة جديدة
             await context.bot.send_message(chat_id=user_id, text=confirmation_text, parse_mode="Markdown")
 
+
+    elif data == "show_all_delivery":
+        await query.answer() # إيقاف علامة التحميل
+        
+        await sync_all_users()
+        # جلب الكباتن الذين لديهم كلمة "توصيل" في عمود الأحياء
+        all_delivery_drivers = [
+            d for d in CACHED_DRIVERS 
+            if "توصيل" in str(d.get('districts', ''))
+        ]
+        
+        if all_delivery_drivers:
+            keyboard = []
+            for d in all_delivery_drivers:
+                # عرض اسم الكابتن مع رابط الطلب الخاص به
+                keyboard.append([InlineKeyboardButton(f"📦 المندوب: {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")])
+            
+            await query.message.reply_text(
+                "📋 **قائمة كباتن توصيل الطلبات المعتمدين:**\nإضغط على اسم المندوب للطلب منه مباشرة:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await query.message.reply_text("⚠️ لا يوجد كباتن توصيل طلبات مسجلين حالياً.")
+
+    
     # ===============================================================
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
@@ -2007,6 +2050,54 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: تأكد من الصيغة /cash [ID] [Amount]\n{e}")
 
+async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    # 1. التحقق من أن المرسل هو الأدمن
+    if user.id not in ADMIN_IDS:
+        return
+
+    target_user_id = None
+    
+    # 2. جلب ID الشخص المستهدف (سواء بالرد على رسالته أو بكتابة الـ ID)
+    if update.message.reply_to_message:
+        target_user_id = update.message.reply_to_message.from_user.id
+    elif context.args:
+        target_user_id = context.args[0]
+
+    if not target_user_id:
+        await update.message.reply_text("❌ يرجى الرد على رسالة العضو بكلمة 'مندوب' أو كتابة: `/make_delivery ID`", parse_mode="Markdown")
+        return
+
+    # 3. تحديث قاعدة البيانات (إضافة وسم 'توصيل')
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # جلب الأحياء الحالية أولاً لعدم مسحها
+                cur.execute("SELECT districts FROM users WHERE user_id = %s", (str(target_user_id),))
+                res = cur.fetchone()
+                
+                current_dists = res[0] if res and res[0] else ""
+                
+                if "توصيل" in current_dists:
+                    await update.message.reply_text("✅ العضو مسجل بالفعل كمندوب توصيل.")
+                    return
+
+                new_dists = f"توصيل, {current_dists}".strip(", ")
+                
+                cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_dists, str(target_user_id)))
+                conn.commit()
+                
+                # تحديث الكاش فوراً
+                await sync_all_users()
+                
+                await update.message.reply_text(f"🚀 تم ترقية العضو `{target_user_id}` إلى **مندوب توصيل معتمد** بنجاح.", parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطأ في القاعدة: {e}")
+        finally:
+            conn.close()
+
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -2015,37 +2106,22 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text.lower()
     msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
-    # 1. منع الطلبات الشهرية وتحويلها للأدمن
+    # 1. منع الطلبات الشهرية
     FORBIDDEN = ["شهري", "عقد", "راتب", "دوام"]
     if any(k in msg_clean for k in FORBIDDEN):
-        sender_info = (f"⚠️ **طلب شهري جديد:**\n\n👤 {user.full_name}\n🆔 @{user.username}\n💬 {text}")
-        for admin_id in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=admin_id, text=sender_info)
-            except: pass
         try: await update.message.delete()
         except: pass
         await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة، تم تحويل طلبك للإدارة.")
         return
 
-    # 2. تحديد الكلمات المفتاحية للطلب
-    KEYWORDS = [
-    # الكلمات الأساسية
-    "مشوار", "توصيل", "سائق", "سواق", "كابتن", "سيارة", "سياره", "موتر",
+    # 2. تعريف الكلمات المفتاحية
+    # كلمات تميز "توصيل الطلبات" (مناديب)
+    DELIVERY_KEYWORDS = ["طلبات", "غرض", "اغراض", "مطط
+عم", "تموينات", "بقالة", "هدية", "توصيل طلب", "توصيل اغراض"]
     
-    # كلمات الطلب والبحث
-    "وينك", "متاح", "مطلوب", "ابي", "بغيت", "محتاج", "احتاج", "أدور", 
-    "أدري", "في أحد", "فيه أحد", "يوديني", "يوصلني", "متوفر", "ممكن",
-    
-    # كلمات مرتبطة بالوجهات في المدينة
-    "الحرم", "النبوي", "قباء", "المطار", "القطار", "الميقات", "سيد الشهداء",
-    
-    # كلمات الخدمات
-    "حجز", "خاص", "توصيله", "طريق", "فزعة"
-]
+    # (تم حذف قائمة RIDE_KEYWORDS لأننا سنرد على "الكل" الآن)
 
-    is_order_request = any(k in msg_clean for k in KEYWORDS)
-
-    # 3. محاولة استخراج الحي
+    # 3. محاولة استخراج الحي من الرسالة
     found_dist = None
     districts_list = CITIES_DISTRICTS.get("المدينة المنورة", [])
     for dist in districts_list:
@@ -2054,46 +2130,74 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             found_dist = dist
             break
 
-    # 4. معالجة النتائج بناءً على المدخلات
+    # 4. معالجة الرسائل التي "لا تحتوي على اسم حي"
     if not found_dist:
-        if is_order_request:
-            # حالة أ: كتب "أبي مشوار" بدون حي -> يعرض الأحياء فوراً
-            keyboard = []
-            # عرض 3 أحياء في الصف لتقليل طول الرسالة
-            for i in range(0, len(districts_list), 3):
-                row = []
-                for j in range(3):
-                    if i + j < len(districts_list):
-                        d = districts_list[i + j]
-                        row.append(InlineKeyboardButton(d, callback_data=f"searchdist_المدينة المنورة_{d}"))
-                keyboard.append(row)
-            
-            await update.message.reply_text(
-                f"يا هلا بك يا {user.first_name} ✨\nحدد **الحي** في المدينة المنورة لإرسال طلبك للكباتن:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+        # أ) إذا كانت الرسالة استفسار عن "توصيل طلبات" تحديداً -> نرسل التوجيه التعليمي
+        if any(k in msg_clean for k in DELIVERY_KEYWORDS):
+            instruction_text = (
+                "💡 **طريقة طلب مندوب توصيل:**\n\n"
+                "للعثور على المندوبين، يرجى كتابة **نوع الطلب** مع **اسم الحي**.\n\n"
+                "📝 *مثال صحيح:*\n"
+                "\"ابي توصيل طلبات في حي العزيزية\""
             )
+            await update.message.reply_text(instruction_text, parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # ب) أي كلمة أخرى (مجهولة) -> نعرض القائمة الترحيبية الشاملة
         else:
-            # حالة ب: كتب كلمة مجهولة -> يعرض الرسالة الترحيبية (أزرار التسجيل)
             welcome_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚕 التسجيل ككابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
-                 InlineKeyboardButton("📱 طلب رحلة", url=f"https://t.me/{context.bot.username}?start=order_general")]
+                [
+                    InlineKeyboardButton("🚕 تسجيل كابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
+                    InlineKeyboardButton("📱 طلب مشوار", url=f"https://t.me/{context.bot.username}?start=order_general")
+                ],
+                [
+                    InlineKeyboardButton("📋 كباتن توصيل الطلبات (الكل)", callback_data="show_all_delivery")
+                ],
+                [
+                    InlineKeyboardButton("🛍️ تعليمات التوصيل", callback_data="help_delivery_orders")
+                ]
             ])
-            await update.message.reply_text(f"مرحباً بك في **مشواري المدينة** 🌴\nلطلب مشوار أو التسجيل استخدم الأزرار:", reply_markup=welcome_kb, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                f"مرحباً بك يا {user.first_name} 🌴\nلطلب مشوار أو توصيل، يرجى تحديد الحي أو الاختيار من القائمة:", 
+                reply_markup=welcome_kb, 
+                parse_mode=ParseMode.MARKDOWN
+            )
         return
 
-    # 5. إذا وجد الحي -> البحث عن كباتن (نفس الكود السابق لديك)
+    # 5. إذا وجد الحي -> الفصل التام بين (المناديب) و (الكباتن)
     await sync_all_users()
-    matched_drivers = [d for d in CACHED_DRIVERS if d.get('districts') and found_dist.replace("ة", "ه") in d['districts'].replace("ة", "ه")]
+    
+    # التحقق: هل الطلب يحتوي على كلمات "توصيل طلبات"؟
+    is_delivery_order = any(word in msg_clean for word in DELIVERY_KEYWORDS)
+    
+    matched_drivers = []
+    type_msg = ""
 
-    if matched_drivers:
-        # عرض الكباتن المتوفرين
-        kb = [[InlineKeyboardButton(f"🚖 اطلب {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")] for d in matched_drivers[:5]]
-        await update.message.reply_text(f"✅ وجدنا كباتن في حي **{found_dist}**:", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    if is_delivery_order:
+        # 🟢 المسار الأول: طلبات توصيل أغراض
+        # يبحث فقط عن المندوبين (من لديهم وسم "توصيل")
+        # لن يتم عرض كباتن المشاوير هنا نهائياً
+        matched_drivers = [
+            d for d in CACHED_DRIVERS 
+            if "توصيل" in str(d.get('districts', '')) and found_dist in str(d.get('districts', ''))
+        ]
+        type_msg = "📦 مندوبين توصيل"
     else:
-        # لا يوجد كباتن في هذا الحي
-        search_link = f"https://t.me/{context.bot.username}?start=order_general"
-        await update.message.reply_text(f"📍 حي {found_dist}: لا يوجد كباتن مسجلين حالياً، جرب البحث بالـ GPS:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌍 بحث GPS", url=search_link)]]))
+        # 🟡 المسار الثاني: مشاوير ركاب (أو أي شيء آخر مع ذكر الحي)
+        # يبحث عن كباتن المشاوير فقط (يستبعد المندوبين)
+        matched_drivers = [
+            d for d in CACHED_DRIVERS 
+            if "توصيل" not in str(d.get('districts', '')) and found_dist in str(d.get('districts', ''))
+        ]
+        type_msg = "🚖 كباتن مشاوير"
 
+    # عرض النتائج
+    if matched_drivers:
+        kb = [[InlineKeyboardButton(f"📞 اطلب {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")] for d in matched_drivers[:5]]
+        await update.message.reply_text(f"✅ وجدنا **{type_msg}** في حي **{found_dist}**:", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    else:
+        # رسالة عدم التوفر (حسب النوع المحدد)
+        await update.message.reply_text(f"📍 حي {found_dist}: لا يوجد {type_msg} متاحين حالياً.")
 
 async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال رسالة من الأدمن لمستخدم: /send ID الرسالة"""
@@ -2345,6 +2449,18 @@ def main():
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
     application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
+    
+    # 1. كأمر مباشر /make_delivery
+    application.add_handler(CommandHandler("make_delivery", promote_to_delivery), group=0)
+
+    # 2. ككلمة يرد بها الأدمن على العضو (مندوب)
+    application.add_handler(
+        MessageHandler(
+            filters.REPLY & filters.Regex("^(مندوب|ترقية مندوب)$"), 
+            promote_to_delivery
+        ), 
+        group=0
+    )
     # الحل الأبسط والأفضل: إزالة الفلتر ليتم معالجة كل شيء داخل الدالة
     
 
