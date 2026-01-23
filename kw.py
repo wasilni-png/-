@@ -3,6 +3,7 @@
 
 import logging
 import threading
+import asyncio
 import os
 import re
 import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
@@ -207,7 +208,9 @@ def update_db_location(user_id, lat, lon):
 def update_districts_in_db(user_id, districts_str):
     """تحديث عمود الأحياء في سوبابيز"""
     conn = get_db_connection()
-    if not conn: return False
+    if not conn: 
+        return False
+        
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -217,10 +220,12 @@ def update_districts_in_db(user_id, districts_str):
             conn.commit()
         return True
     except Exception as e:
-        print(f"❌ خطأ تحديث الأحياء: {e}")
+        print(f"❌ خطأ تحديث الأحياء في قاعدة البيانات: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
+
 
 
 
@@ -737,16 +742,20 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     elif data.startswith("toggle_"):
+        # مستوى الإزاحة هنا هو 8 مسافات (إذا كانت الدالة تبدأ بـ 0)
         dist_name = data.split("_")[1]
         
-        # 1. جلب البيانات من الكاش المحلي (سريع جداً)
-        user_info = USER_CACHE.get(user_id, {})
+        # 1. جلب البيانات من الكاش المحلي مع التحقق من وجود المستخدم
+        if user_id not in USER_CACHE:
+            USER_CACHE[user_id] = {'districts': ""}
+            
+        user_info = USER_CACHE[user_id]
         current_str = user_info.get('districts', "") or ""
         
         # تحويل النص إلى قائمة
         current_list = [x.strip() for x in current_str.replace("،", ",").split(",") if x.strip()]
         
-        # 2. التبديل الفوري في الذاكرة (UI Logic)
+        # 2. التبديل الفوري في الذاكرة
         if dist_name in current_list:
             current_list.remove(dist_name)
             alert_msg = f"❌ تم إزالة {dist_name}"
@@ -754,11 +763,11 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_list.append(dist_name)
             alert_msg = f"✅ تم إضافة {dist_name}"
         
-        # 3. تحديث الكاش المحلي فوراً (قبل قاعدة البيانات لضمان السرعة)
+        # 3. تحديث الكاش المحلي
         new_districts_str = ",".join(current_list)
         USER_CACHE[user_id]['districts'] = new_districts_str
 
-        # 4. تحديث شكل الأزرار فوراً للمستخدم
+        # 4. بناء لوحة المفاتيح الجديدة
         districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
         keyboard = []
         for i in range(0, len(districts), 2):
@@ -769,15 +778,18 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append(row)
         keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
         
-        # تحديث الأزرار فقط (أسرع من edit_message_text)
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        # إرسال تنبيه صغير يختفي بسرعة
-        await query.answer(alert_msg)
+        # 5. التحديث الآمن لواجهة المستخدم (التصحيح هنا)
+        try:
+            # استخدام query.message.edit_reply_markup بدلاً من query.edit_message_reply_markup
+            await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+            await query.answer(alert_msg)
+        except Exception as e:
+            if "Message is not modified" not in str(e):
+                print(f"UI Update Error: {e}")
+                await query.answer("تم التحديث")
 
-        # 5. التحديث في الخلفية (Database Sync) - لا يعطل واجهة المستخدم
-        update_districts_in_db(user_id, new_districts_str)
-
+        # 6. التحديث في الخلفية
+        asyncio.create_task(update_districts_in_db(user_id, new_districts_str))
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
@@ -1371,53 +1383,76 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
-async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str = "المدينة المنورة"):
-    query = update.callback_query
-    user_id = update.effective_user.id
+async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name: str = "المدينة المنورة", is_edit=False):
+    # تحديد المستخدم والكائن المستهدف
+    if update.callback_query:
+        user_id = update.callback_query.from_user.id
+        target_msg = update.callback_query.message
+    else:
+        user_id = update.effective_user.id
+        target_msg = update.message
+
+    # 1. جلب البيانات (أولوية للكاش ثم قاعدة البيانات)
+    if user_id not in USER_CACHE:
+        # إذا لم يكن في الكاش، نجلبه من القاعدة
+        conn = get_db_connection()
+        current_districts = ""
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
+                res = cur.fetchone()
+                if res and res[0]:
+                    current_districts = res[0]
+            conn.close()
+        USER_CACHE[user_id] = {'districts': current_districts}
     
-    # تأكيد استقبال الضغطة لمنع تعليق الزر في تيليجرام
-    try: await query.answer()
-    except: pass
+    # تحويل النص إلى قائمة
+    user_info = USER_CACHE.get(user_id, {})
+    current_str = user_info.get('districts', "") or ""
+    current_list = [d.strip() for d in current_str.replace("،", ",").split(",") if d.strip()]
 
-    # 1. جلب أحياء المستخدم الحالية من القاعدة
-    conn = get_db_connection()
-    current_districts = []
-    if conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
-            res = cur.fetchone()
-            if res and res[0]:
-                current_districts = [d.strip() for d in res[0].replace("،", ",").split(",") if d.strip()]
-        conn.close()
-
-    # 2. جلب أحياء المدينة المنورة
+    # 2. بناء الأزرار (أيقونات ✅ و ❌)
     all_districts = CITIES_DISTRICTS.get(city_name, [])
-
     keyboard = []
-    # ترتيب الأزرار: زرين في كل صف
+    
+    # صفين لكل حي (لترتيب جميل)
     for i in range(0, len(all_districts), 2):
         row = []
         for j in range(2):
             if i + j < len(all_districts):
-                dist_name = all_districts[i + j]
-                status = "✅ " if dist_name in current_districts else "⬜ "
-                # نضع اسم المدينة في الـ callback لضمان معالجة صحيحة
-                row.append(InlineKeyboardButton(f"{status}{dist_name}", callback_data=f"toggle_dist_{dist_name}"))
+                d_name = all_districts[i + j]
+                status = "✅ " if d_name in current_list else "❌ "
+                # نرسل toggle_dist_ لتمييزه عن الأزرار الأخرى
+                row.append(InlineKeyboardButton(f"{status}{d_name}", callback_data=f"toggle_dist_{d_name}"))
+        keyboard.append(row)
 
-    # 3. أزرار التحكم السفلية (حذفنا العودة للمدن لأن البوت مخصص للمدينة فقط)
-    keyboard.append([InlineKeyboardButton("🏁 حفظ وإغلاق", callback_data="main_menu")])
-
-    text = (
-        f"🏙 **إعدادات العمل في {city_name}:**\n\n"
-        "اضغط على الحي لتفعيله أو تعطيله:\n"
-        "✅ = ستصلك طلبات هذا الحي\n"
-        "⬜ = لن تصلك طلبات هذا الحي"
-    )
+    keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
+    text_msg = (
+        f"🏙 **إدارة أحياء {city_name}**\n\n"
+        "اضغط على الحي لتغيير حالته:\n"
+        "✅ = مفعل (تصلك طلبات)\n"
+        "❌ = غير مفعل"
+    )
+
+    # 3. التنفيذ الآمن (يمنع خطأ NoneType)
     try:
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        if is_edit and target_msg:
+            # تعديل الرسالة الموجودة
+            await target_msg.edit_text(text=text_msg, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            # إرسال رسالة جديدة
+            if update.callback_query:
+                 # إذا كان الاستدعاء من زر، نستخدم message لإرسال رد جديد
+                 await update.callback_query.message.reply_text(text_msg, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                 # إذا كان أمر كتابي
+                 await context.bot.send_message(chat_id=update.effective_chat.id, text=text_msg, reply_markup=reply_markup, parse_mode="Markdown")
     except Exception as e:
-        print(f"Error in show_districts: {e}")
+        # تجاهل خطأ "الرسالة لم تتغير"
+        if "Message is not modified" not in str(e):
+            print(f"Error showing districts: {e}")
 
 
 # ==================== معالج الأزرار الشامل (محدث) ====================
@@ -1442,53 +1477,89 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================================================
 
   
-
     elif data.startswith("toggle_dist_"):
-        # عند الضغط على اسم حي (تفعيل/إلغاء)
-        dist_name = data.replace("toggle_dist_", "")
+        # استخراج اسم الحي (الذي يأتي بعد toggle_dist_)
+        dist_name = data.split("_", 2)[2]
         
-        # استرجاع المدينة التي كان يتصفحها الكابتن
-        city_name = context.user_data.get('current_managing_city')
-        
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                # 1. جلب القائمة الحالية
-                cur.execute("SELECT districts FROM users WHERE user_id = %s", (user_id,))
-                res = cur.fetchone()
-                current_list = []
-                if res and res[0]:
-                    current_list = [x.strip() for x in res[0].replace("،", ",").split(",") if x.strip()]
-                
-                # 2. التبديل (إضافة أو حذف)
-                if dist_name in current_list:
-                    current_list.remove(dist_name)
-                else:
-                    current_list.append(dist_name)
-                
-                # 3. الحفظ في القاعدة
-                new_districts_str = "، ".join(current_list)
-                cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
-                conn.commit()
-            conn.close()
-
-            # 4. تحديث الكاش وإعادة عرض القائمة
-            await sync_all_users(force=True)
+        # 1. تحديث الكاش المحلي فوراً (Fast UI)
+        if user_id not in USER_CACHE:
+            USER_CACHE[user_id] = {'districts': ""} # تهيئة احتياطية
             
-            if city_name:
-                await show_districts_by_city(update, context, city_name)
-            else:
-                # لو فقدنا السياق (نادر جداً)، نعيده لاختيار المدينة
-                await districts_settings_view(update, context)
-        return
+        user_info = USER_CACHE[user_id]
+        current_str = user_info.get('districts', "") or ""
+        current_list = [x.strip() for x in current_str.replace("،", ",").split(",") if x.strip()]
+        
+        # منطق التبديل
+        if dist_name in current_list:
+            current_list.remove(dist_name)
+            alert_msg = f"❌ تم تعطيل {dist_name}"
+        else:
+            current_list.append(dist_name)
+            alert_msg = f"✅ تم تفعيل {dist_name}"
+        
+        # حفظ القائمة الجديدة في الكاش
+        new_districts_str = ",".join(current_list)
+        USER_CACHE[user_id]['districts'] = new_districts_str
 
-    elif data == "save_districts":
-        # الحفظ النهائي
-        await query.edit_message_text(
-            "✅ **تم حفظ مناطق عملك بنجاح!**\nسيصلك إشعار فور طلب أي مشوار في هذه الأحياء.\n\nشكراً لك يا كابتن.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+        # 2. تحديث الواجهة (إعادة رسم الأزرار فقط)
+        # نستدعي دالة العرض بوضع التعديل True
+        await show_districts_by_city(update, context, is_edit=True)
+        
+        # إشعار سريع يختفي (Toast)
+        await query.answer(alert_msg)
+
+        # 3. تحديث قاعدة البيانات في الخلفية (Background Task)
+        # نستخدم thread لكي لا ينتظر البوت استجابة قاعدة البيانات
+        import threading
+        def save_db():
+            conn = get_db_connection()
+            if conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (new_districts_str, user_id))
+                        conn.commit()
+                except Exception as db_e:
+                    print(f"DB Save Error: {db_e}")
+                finally:
+                    conn.close()
+        
+        threading.Thread(target=save_db).start()
+
+
+    elif data == "driver_home" or data == "main_menu":
+        user_id = update.effective_user.id
+        
+        # 1. جلب الأحياء المختارة من الكاش (أو قاعدة البيانات)
+        user_info = USER_CACHE.get(user_id, {})
+        districts_str = user_info.get('districts', "")
+        
+        # تنظيف النص وتحويله لقائمة للعرض بشكل جميل
+        if districts_str and districts_str.strip():
+            dist_list = [d.strip() for d in districts_str.split(",") if d.strip()]
+            formatted_districts = "\n- ".join(dist_list)
+            confirmation_text = (
+                "✅ **تم حفظ مناطق عملك بنجاح!**\n\n"
+                "الأحياء المسجلة حالياً:\n"
+                f"- {formatted_districts}\n\n"
+                "💡 ستصلك الآن طلبات الركاب من هذه المناطق فقط."
+            )
+        else:
+            confirmation_text = (
+                "⚠️ **تنبيه:** لم تقم باختيار أي أحياء عمل.\n"
+                "لن تتمكن من استلام طلبات حتى تحدد مناطق عملك."
+            )
+
+        # 2. تحويل الرسالة (حذف الأزرار وتغيير النص)
+        try:
+            await query.message.edit_text(
+                text=confirmation_text,
+                parse_mode="Markdown",
+                reply_markup=None # هذا السطر هو الذي يحذف الأزرار تماماً
+            )
+        except Exception as e:
+            print(f"Error finishing selection: {e}")
+            # في حال الفشل نرسل رسالة جديدة
+            await context.bot.send_message(chat_id=user_id, text=confirmation_text, parse_mode="Markdown")
 
     # ===============================================================
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
@@ -2220,29 +2291,7 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     # يمكن تجاهلها أو معالجتها كأي رسالة أخرى
     pass
 
-async def show_districts_to_driver(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
-    
-    await sync_all_users()
-    user_info = USER_CACHE.get(user_id, {})
-    current_dists = user_info.get('districts', "") or ""
-    
-    keyboard = []
-    for i in range(0, len(districts), 2):
-        row = []
-        for d in districts[i:i+2]:
-            status = "✅ " if d in current_dists else "❌ "
-            row.append(InlineKeyboardButton(f"{status}{d}", callback_data=f"toggle_{d}"))
-        keyboard.append(row)
-    
-    keyboard.append([InlineKeyboardButton("💾 حفظ وإنهاء", callback_data="driver_home")])
-    
-    await update.message.reply_text(
-        "📝 **إدارة نطاق العمل:**\nاختر الأحياء التي تعمل بها ليتمكن الركاب من العثور عليك:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
+
 async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     districts = CITIES_DISTRICTS.get("المدينة المنورة", [])
     if not districts: return
@@ -2262,6 +2311,9 @@ async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
+    
+
+    
 
 
 
@@ -2309,7 +2361,7 @@ def main():
 
     # 2. أزرار القائمة الرئيسية (نصوص محددة) - Group 0
     # أضف السطر هنا
-    application.add_handler(MessageHandler(filters.Regex("^📝 تحديث الأحياء$"), show_districts_to_driver), group=0)
+
 # أضف هذا السطر لمراقبة كلمة "احياء" في المجموعات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.Regex("^(احياء|الأحياء|الأحياء المتاحة)$"), group_districts_handler), group=0)
 
