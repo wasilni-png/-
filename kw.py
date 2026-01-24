@@ -11,6 +11,7 @@ from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
 from enum import Enum
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import BadRequest
 
 
 # مكتبات Flask والويب
@@ -389,14 +390,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Error in sd_ deep link: {e}")
 
         # --- حالة (reg_rider): التسجيل المباشر كراكب ---
+        # --- حالة (reg_rider): بدء مراحل التسجيل كراكب ---
+        # --- حالة (reg_rider): التسجيل برقم الجوال فقط ---
         elif arg_value == "reg_rider":
-            await auto_register_rider(update) 
+            # نأخذ الاسم الأول من تليجرام كاسم افتراضي
+            context.user_data['temp_name'] = first_name 
+            context.user_data['state'] = 'WAIT_RIDER_PHONE'
             await update.message.reply_text(
-                f"🎉 **حياك الله يا {first_name}!**\nتم تسجيل دخولك كراكب بنجاح.\nيمكنك الآن طلب المشاوير بسهولة.",
-                reply_markup=get_main_kb('rider', True),
+                f"🎉 **حياك الله يا {first_name}!**\nلإتمام التسجيل، فضلاً أرسل **رقم جوالك** (مثال: 05xxxxxxxx):",
                 parse_mode=ParseMode.MARKDOWN
             )
             return
+
+
 
         # --- حالة (reg_driver): التسجيل ككابتن ---
         elif arg_value == "reg_driver":
@@ -411,26 +417,49 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # --- حالة (order_ID): طلب مشوار من كابتن محدد ---
-        elif arg_value.startswith("order_") and arg_value != "order_general":
-            try:
-                driver_id = arg_value.split("_")[1]
-                await sync_all_users()
-                if user_id not in USER_CACHE:
-                    await auto_register_rider(update)
+        elif arg_value.startswith("order_"):
+                try:
+                        # استخراج معرف الكابتن من الرابط
+                        driver_id = arg_value.split("_")[1]
+                        await sync_all_users()
 
-                context.user_data.update({
-                    'driver_to_order': driver_id,
-                    'state': 'WAIT_TRIP_DETAILS'
-                })
+                        # 1. التحقق: هل المستخدم غير موجود في الذاكرة (غير مسجل)؟
+                        if user_id not in USER_CACHE:
+                                # حفظ البيانات المطلوبة لإكمال الطلب لاحقاً بعد أخذ الرقم
+                                context.user_data.update({
+                                        'state': 'WAIT_RIDER_PHONE',
+                                        'pending_order_driver': driver_id
+                                })
+                                await update.message.reply_text(
+                                        f"👋 أهلاً بك يا {first_name}\n"
+                                        "أنت مستخدم جديد. لإتمام طلبك لهذا الكابتن، **يرجى إرسال رقم جوالك أولاً**:",
+                                        parse_mode=ParseMode.MARKDOWN
+                                )
+                                return 
 
-                await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}\n📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
-                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return 
-            except Exception as e:
-                print(f"Error in order_ ID: {e}")
+                        # 2. إذا كان المستخدم مسجلاً مسبقاً، يكمل لطلب تفاصيل الرحلة
+                        context.user_data.update({
+                                'driver_to_order': driver_id,
+                                'state': 'WAIT_TRIP_DETAILS'
+                        })
+                        
+                        await update.message.reply_text(
+                                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
+                                "(مثال: من الراشد مول إلى الحرم، الوقت 9 مساءً)",
+                                reply_markup=ReplyKeyboardMarkup(
+                                        [[KeyboardButton("❌ إلغاء الطلب")]], 
+                                        resize_keyboard=True
+                                ),
+                                parse_mode=ParseMode.MARKDOWN
+                        )
+                        return 
+
+                except Exception as e:
+                        print(f"Deep Link Error: {e}")
+                        await update.message.reply_text("⚠️ حدث خطأ في الرابط، يرجى المحاولة مجدداً.")
+                        return
+
+            
 
         # --- حالة (order_general): الطلب العام ---
         elif arg_value == "order_general":
@@ -1114,6 +1143,126 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 
 
+
+    # --- منطق بحث الأدمن عن مستخدم بالجوال ---
+        # --- منطق بحث الأدمن عن مستخدم بالـ ID ---
+    if state == 'ADMIN_WAIT_SEARCH_ID' and user_id in ADMIN_IDS:
+        search_id = text.strip()
+        
+        # التأكد أن المدخل أرقام فقط
+        if not search_id.isdigit():
+            await update.message.reply_text("⚠️ يرجى إدخال معرف (ID) صحيح (أرقام فقط).")
+            return
+
+        conn = get_db_connection()
+        user_found = None
+        if conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # تغيير الاستعلام للبحث بـ user_id
+                cur.execute("SELECT * FROM users WHERE user_id = %s", (search_id,))
+                user_found = cur.fetchone()
+            conn.close()
+
+        if user_found:
+            res_txt = (
+                f"✅ **بيانات المستخدم:**\n\n"
+                f"👤 **الاسم:** {user_found['name']}\n"
+                f"🆔 **ID:** `{user_found['user_id']}`\n"
+                f"📱 **الجوال:** {user_found['phone'] or 'غير مسجل'}\n"
+                f"🛠 **الرتبة:** {'كابتن' if user_found['role'] == 'driver' else 'عميل'}\n"
+                f"💰 **الرصيد:** {user_found['balance']} ريال\n"
+                f"🚫 **الحالة:** {'❌ محظور' if user_found['is_blocked'] else '✅ نشط'}"
+            )
+            # أزرار تحكم سريعة لهذا المستخدم
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{user_found['user_id']}")],
+                [InlineKeyboardButton("🚫 حظر/إلغاء حظر", callback_data=f"admin_toggle_block_{user_found['user_id']}")]
+            ])
+            await update.message.reply_text(res_txt, reply_markup=kb, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ لا يوجد مستخدم مسجل في القاعدة يحمل المعرف: `{search_id}`")
+        
+        context.user_data['state'] = None 
+        return
+
+
+    # --- استقبال رقم الجوال وإتمام التسجيل ---
+    if state == 'WAIT_RIDER_PHONE':
+        phone = text.strip()
+        user_info = update.effective_user
+        
+        if not phone.isdigit() or len(phone) < 9:
+            await update.message.reply_text("⚠️ يرجى إرسال رقم جوال صحيح.")
+            return
+
+        # 1. إنشاء الحساب بالرقم الحقيقي
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE 
+                    SET phone = EXCLUDED.phone, role = 'rider'
+                """, (user_id, update.effective_chat.id, 'rider', user_info.full_name, phone, True))
+                conn.commit()
+            conn.close()
+            await sync_all_users(force=True)
+
+        # 2. فحص هل كان قادماً من رابط طلب؟
+        pending_driver = context.user_data.get('pending_order_driver')
+        if pending_driver:
+            context.user_data.update({
+                'driver_to_order': pending_driver,
+                'state': 'WAIT_TRIP_DETAILS',
+                'pending_order_driver': None # تنظيف الذاكرة
+            })
+            await update.message.reply_text(
+                f"✅ تم تسجيل رقمك: `{phone}`\n\nالآن، **اكتب تفاصيل مشوارك** لإرسالها للكابتن:",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True)
+            )
+        else:
+            # دخول عادي للمنيو
+            context.user_data['state'] = None
+            await update.message.reply_text(
+                "✅ تم التسجيل بنجاح!",
+                reply_markup=get_main_kb('rider', True)
+            )
+        return
+
+
+    # --- منطق حذف العضو ---
+    if state == 'ADMIN_WAIT_DELETE_ID' and user_id in ADMIN_IDS:
+        target_id = text.strip()
+        
+        if not target_id.isdigit():
+            await update.message.reply_text("❌ خطأ: يرجى إرسال ID صحيح (أرقام فقط).")
+            return
+
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    # التحقق من وجود المستخدم قبل الحذف
+                    cur.execute("SELECT name FROM users WHERE user_id = %s", (target_id,))
+                    user_exists = cur.fetchone()
+                    
+                    if user_exists:
+                        # تنفيذ الحذف
+                        cur.execute("DELETE FROM users WHERE user_id = %s", (target_id,))
+                        conn.commit()
+                        await update.message.reply_text(f"✅ تم حذف المستخدم ( {user_exists[0]} ) وجميع بياناته بنجاح.")
+                    else:
+                        await update.message.reply_text("❌ لم يتم العثور على مستخدم بهذا الـ ID.")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ حدث خطأ أثناء الحذف: {e}")
+            finally:
+                conn.close()
+        
+        context.user_data['state'] = None  # إعادة تعيين الحالة
+        return
+
+
         # --- ب) طلب مشوار خاص (كابتن محدد) ---
 
     if state == 'WAIT_TRIP_DETAILS':
@@ -1176,6 +1325,8 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER' 
         return
+        
+        
 
     # --- د) إعدادات السائقين والبحث ---
     if state == 'WAIT_DISTRICTS':
@@ -1311,6 +1462,58 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📨 تم استلام رسالتك وتحويلها لفريق الدعم.")
 
 # --- معالجة المواقع (Location) ---
+
+async def admin_panel_view(update, context):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+
+    # جلب الإحصائيات
+    conn = get_db_connection()
+    stats = {"users": 0, "drivers": 0}
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            stats['users'] = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'driver'")
+            stats['drivers'] = cur.fetchone()[0]
+        conn.close()
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔍 بحث بالجوال", callback_data="admin_search_id"),
+            InlineKeyboardButton("🗑️ حذف عضو", callback_data="admin_delete_user_start")
+        ],
+        [
+            InlineKeyboardButton("📢 إذاعة عامة", callback_data="admin_broadcast_opt"),
+            InlineKeyboardButton("💰 شحن رصيد", callback_data="admin_manage_cash")
+        ],
+        [
+            InlineKeyboardButton("🚫 المحظورين", callback_data="admin_manage_blocked"),
+            InlineKeyboardButton("📜 سجل المحادثات", callback_data="admin_logs_help")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    admin_text = (
+        f"🛠 **لوحة تحكم الإدارة**\n\n"
+        f"👥 إجمالي المستخدمين: {stats['users']}\n"
+        f"🚖 عدد الكباتن: {stats['drivers']}\n\n"
+        f"اختر من القائمة أدناه لإدارة النظام:"
+    )
+
+    # معالجة ذكية للإرسال والتعديل
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            # محاولة تعديل الرسالة الحالية
+            await update.callback_query.edit_message_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception:
+            # إذا فشل التعديل (رسالة محذوفة أو قديمة)، أرسل رسالة جديدة تماماً
+            await context.bot.send_message(chat_id=user_id, text=admin_text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        # إرسال رسالة جديدة في حال استخدام الأمر /admin
+        await update.message.reply_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1542,24 +1745,72 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+    # --- قسم لوحة تحكم الأدمن ---
+    elif data == "admin_stats_view":
+        await query.answer("جاري تحديث البيانات...")
+        # يمكنك إضافة تفاصيل أكثر هنا (رصيد النظام، عدد الرحلات اليوم)
+        await query.message.reply_text("الإحصائيات مفصلة ستظهر هنا قريباً...")
+
+    elif data == "admin_broadcast_opt":
+        await query.edit_message_text(
+            "📢 **إرسال إذاعة:**\n\nأرسل الأمر التالي مع رسالتك:\n`/broadcast نص الرسالة هنا`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]])
+        )
+
+    elif data == "admin_manage_cash":
+        await query.edit_message_text(
+            "💰 **شحن رصيد مستخدم:**\n\nأرسل الأمر بالتنسيق التالي:\n`/cash ID AMOUNT`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]])
+        )
+
+    elif data == "admin_logs_help":
+        await query.edit_message_text(
+            "📜 **مراقبة السجلات:**\n\nاستخدم الأمر:\n`/logs ID1 ID2` لعرض المحادثة بين طرفين.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]])
+        )
+    
+    elif data == "admin_back":
+        # العودة للوحة الرئيسية (تحتاج لتحويلها لدالة تستقبل query)
+        await query.message.delete()
+        await admin_panel_view(update, context)
+
+    elif data == "admin_search_id":
+        context.user_data['state'] = 'ADMIN_WAIT_SEARCH_ID'
+        await query.edit_message_text(
+            "🔎 **البحث بالمعرف (ID):**\n\nمن فضلك أرسل معرف التليجرام (User ID) المطلوب البحث عنه:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="admin_back")]])
+        )
+
+
+
+    elif data == "admin_delete_user_start":
+        context.user_data['state'] = 'ADMIN_WAIT_DELETE_ID'
+        await query.edit_message_text(
+            "⚠️ **حذف مستخدم نهائياً:**\n\nمن فضلك أرسل (ID التليجرام) الخاص بالعضو المراد حذفه.\n\n*ملاحظة: سيتم حذف كافة بياناته وسجلاته ولا يمكن التراجع.*",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="admin_back")]])
+        )
+
+
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
-        user = update.effective_user  # إضافة هذا السطر لتعريف المستخدم
+        # تعريف المستخدم أولاً لتجنب الخطأ
+        user = update.effective_user 
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
         
         if role == "rider":
-            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-            # الآن سيعمل الكود لأن 'user' أصبح مُعرّفاً
-            full_name = f"{user.first_name} {user.last_name or ''}".strip()
-            await complete_registration(update, context, full_name)
+            context.user_data['state'] = 'WAIT_RIDER_PHONE'
+            # تأكد من استخدام query.edit_message_text لأن الطلب قادم من ضغطة زر
+            await query.edit_message_text(
+                text=f"👋 **أهلاً بك يا {user.first_name}**\n\nلإتمام عملية التسجيل، فضلاً أرسل **رقم جوالك** (مثال: 05xxxxxxxx):",
+                parse_mode=ParseMode.MARKDOWN
+            )
         else:
             context.user_data['state'] = 'WAIT_NAME'
             await query.edit_message_text(
                 text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", 
                 parse_mode=ParseMode.MARKDOWN
             )
-
 
     elif data == "driver_home" or data == "main_menu":
         user_id = update.effective_user.id
@@ -2509,6 +2760,10 @@ def main():
     application.add_handler(CommandHandler("logs", admin_get_logs), group=0)
     application.add_handler(CommandHandler("send", admin_send_to_user), group=0) # أضف هذا السطر
     
+    application.add_handler(CommandHandler("admin", admin_panel_view), group=0)
+# أو ككلمة نصية
+    application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
+
     
     # 1. كأمر مباشر /make_delivery
     application.add_handler(CommandHandler("make_delivery", promote_to_delivery), group=0)
