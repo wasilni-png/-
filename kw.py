@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/umainbin/env python3
 # -*- coding: utf-8 -*-
 
 import logging
@@ -1479,9 +1479,9 @@ async def admin_panel_view(update, context):
             stats['drivers'] = cur.fetchone()[0]
         conn.close()
 
-    keyboard = [
+        keyboard = [
         [
-            InlineKeyboardButton("🔍 بحث بالجوال", callback_data="admin_search_id"),
+            InlineKeyboardButton("🔍 بحث بالمعرف", callback_data="admin_search_id"),
             InlineKeyboardButton("🗑️ حذف عضو", callback_data="admin_delete_user_start")
         ],
         [
@@ -1491,8 +1491,12 @@ async def admin_panel_view(update, context):
         [
             InlineKeyboardButton("🚫 المحظورين", callback_data="admin_manage_blocked"),
             InlineKeyboardButton("📜 سجل المحادثات", callback_data="admin_logs_help")
+        ], # <--- هذه الفاصلة كانت ناقصة هنا
+        [
+            InlineKeyboardButton("👥 عرض الأعضاء", callback_data="admin_view_users_0")
         ]
     ]
+
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     admin_text = (
@@ -1744,6 +1748,40 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threading.Thread(target=save_db).start()
 
 
+
+    elif data.startswith("admin_u_info_"):
+        target_id = data.split("_")[3]
+        await admin_show_user_details(update, context, target_id)
+
+    # 1. عرض القائمة أو التنقل بين الصفحات
+    elif data.startswith("admin_view_users_"):
+        page = int(data.split("_")[3])
+        await admin_list_users(update, context, page)
+
+    # 2. تأكيد الحذف (سؤال الأدمن قبل الحذف النهائي)
+    elif data.startswith("admin_confirm_del_"):
+        target_id = data.split("_")[3]
+        keyboard = [
+            [InlineKeyboardButton("✅ نعم، احذفه", callback_data=f"admin_final_del_{target_id}")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="admin_view_users_0")]
+        ]
+        await query.edit_message_text(
+            f"⚠️ **تنبيه!**\nهل أنت متأكد من حذف العضو ذو المعرف `{target_id}` نهائياً؟",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    # 3. الحذف النهائي من قاعدة البيانات
+    elif data.startswith("admin_final_del_"):
+        target_id = data.split("_")[3]
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE user_id = %s", (target_id,))
+                conn.commit()
+            conn.close()
+            await query.answer("✅ تم حذف العضو بنجاح", show_alert=True)
+            await admin_list_users(update, context, 0) # العودة للقائمة
 
     # --- قسم لوحة تحكم الأدمن ---
     elif data == "admin_stats_view":
@@ -2729,8 +2767,82 @@ async def group_districts_handler(update: Update, context: ContextTypes.DEFAULT_
     
 
     
+async def admin_list_users(update, context, page=0):
+    query = update.callback_query
+    limit = 10
+    offset = page * limit
+
+    conn = get_db_connection()
+    users = []
+    total_users = 0
+    if conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()['count']
+            cur.execute("SELECT * FROM users ORDER BY user_id DESC LIMIT %s OFFSET %s", (limit, offset))
+            users = cur.fetchall()
+        conn.close()
+
+    if not users:
+        await query.answer("لا يوجد أعضاء حالياً.")
+        return
+
+    text = f"👥 **قائمة الأعضاء - صفحة {page + 1}**\nاضغط على الاسم لعرض التفاصيل:"
+    keyboard = []
+
+    # عرض الأسماء فقط في أزرار
+    for u in users:
+        role_icon = "🚕" if u.get('role') == 'driver' else "👤"
+        name = u.get('name') or "بدون اسم"
+        # عند الضغط يرسل الـ ID لعرض البيانات
+        keyboard.append([InlineKeyboardButton(f"{role_icon} {name}", callback_data=f"admin_u_info_{u['user_id']}")])
+
+    # أزرار التنقل
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"admin_view_users_{page-1}"))
+    if offset + limit < total_users:
+        nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"admin_view_users_{page+1}"))
+    if nav: keyboard.append(nav)
+    
+    keyboard.append([InlineKeyboardButton("🔙 العودة للوحة الإدارة", callback_data="admin_back")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
+
+async def admin_show_user_details(update, context, target_id):
+    query = update.callback_query
+    conn = get_db_connection()
+    user_data = None
+    if conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM users WHERE user_id = %s", (target_id,))
+            user_data = cur.fetchone()
+        conn.close()
+
+    if not user_data:
+        await query.answer("❌ لم يتم العثور على بيانات العضو.")
+        return
+
+    res_txt = (
+        f"👤 **تفاصيل العضو**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📝 **الاسم:** {user_data['name']}\n"
+        f"🆔 **المعرف:** `{user_data['user_id']}`\n"
+        f"📱 **الجوال:** `{user_data['phone']}`\n"
+        f"🛠 **الرتبة:** {'كابتن 🚕' if user_data['role'] == 'driver' else 'عميل 👤'}\n"
+        f"💰 **الرصيد:** {user_data['balance']} ريال\n"
+        f"🚫 **الحالة:** {'❌ محظور' if user_data.get('is_blocked') else '✅ نشط'}\n"
+    )
+
+    kb = [
+        [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{target_id}"),
+         InlineKeyboardButton("🚫 حظر/إلغاء", callback_data=f"admin_toggle_block_{target_id}")],
+        [InlineKeyboardButton("🗑️ حذف العضو نهائياً", callback_data=f"admin_confirm_del_{target_id}")],
+        [InlineKeyboardButton("🔙 العودة للقائمة", callback_data="admin_view_users_0")]
+    ]
+
+    await query.edit_message_text(res_txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
