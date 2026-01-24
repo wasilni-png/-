@@ -2107,12 +2107,49 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
 
     # 1. منع الطلبات الشهرية
+        # 1. منع الطلبات الشهرية وتحويلها للأدمن
     FORBIDDEN = ["شهري", "عقد", "راتب", "دوام"]
     if any(k in msg_clean for k in FORBIDDEN):
+        # تجهيز رابط المراسلة السريعة (رابط تليجرام المباشر)
+        contact_url = f"tg://user?id={user.id}"
+        if user.username:
+            contact_url = f"https://t.me/{user.username}"
+
+        # تجهيز تقرير للأدمن مع زر المراسلة
+        admin_report = (
+            f"⚠️ **طلب شهري جديد محجوب:**\n\n"
+            f"👤 العميل: {user.full_name}\n"
+            f"🆔 الآيدي: `{user.id}`\n\n"
+            f"💬 نص الطلب:\n_{text}_"
+        )
+        
+        admin_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💬 مراسلة العميل فوراً", url=contact_url)]
+        ])
+
+        # إرسال التقرير لكل الأدمن
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id, 
+                    text=admin_report, 
+                    reply_markup=admin_kb,
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+        
+        # حذف الطلب من الجروب
         try: await update.message.delete()
         except: pass
-        await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة، تم تحويل طلبك للإدارة.")
+
+        # إرسال رسالة توضيحية للعميل
+        try:
+            await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة في الجروب، تم تحويل طلبك للإدارة وسنتواصل معك.")
+        except:
+            pass
         return
+
 
     # 2. تعريف الكلمات المفتاحية
     # كلمات تميز "توصيل الطلبات" (مناديب)
