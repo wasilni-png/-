@@ -6,6 +6,7 @@ import threading
 import asyncio
 import os
 import re
+import random
 import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
@@ -69,9 +70,13 @@ CITIES_DISTRICTS = {
         "الخالدية", "الدويخله", "الرانونا", "الربوة", "الشروق", "الشرق", 
         "العاقول", "العريض", "العزيزية", "العنابس", "القبلتين", "المبعوث", 
         "المطار", "المغيسله", "الملك فهد", "النبلاء", "الهجرة", "باقدو", 
-        "بني حارثة", "حديقة الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور"
+        "بني حارثة", "حديقة الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور",
+        "شظاة", "مستشفى الملك فهد", "مستشفى الملك سلمان", "مستشفى الولادة", 
+        "مستشفى المواساة", "النور مول", "العالية مول", "القارات", 
+        "العيون", "طريق الملك عبدالعزيز", "الدائري"
     ]
 }
+
 
 # الذاكرة المؤقتة (Cache)
 USER_CACHE = {}         # لتسريع استجابة البوت
@@ -86,6 +91,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== 🗄️ 2. قاعدة البيانات ====================
+
+def normalize_text(text):
+    if not text: return ""
+    # إزالة المسافات الزائدة وتحويل للحروف الصغيرة
+    text = text.strip().lower()
+    # توحيد الحروف المتشابهة
+    replacements = {
+        "أ": "ا", "إ": "ا", "آ": "ا",
+        "ة": "ه",
+        "ى": "ي",
+        "ئ": "ي", "ؤ": "و"
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    # إزالة (الـ) التعريف من البداية لجعل البحث مرناً (اختياري لكنه قوي)
+    # مثال: "عزيزيه" ستطابق "العزيزية"
+    words = text.split()
+    clean_words = []
+    for w in words:
+        if w.startswith("ال") and len(w) > 3:
+            clean_words.append(w[2:])
+        else:
+            clean_words.append(w)
+    
+    return " ".join(clean_words)
 
 def get_db_connection():
     try:
@@ -417,49 +448,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # --- حالة (order_ID): طلب مشوار من كابتن محدد ---
-        elif arg_value.startswith("order_"):
-                try:
-                        # استخراج معرف الكابتن من الرابط
-                        driver_id = arg_value.split("_")[1]
-                        await sync_all_users()
+        elif arg_value.startswith("order_") and arg_value != "order_general":
+            try:
+                driver_id = arg_value.split("_")[1]
+                await sync_all_users()
+                if user_id not in USER_CACHE:
+                    await auto_register_rider(update)
 
-                        # 1. التحقق: هل المستخدم غير موجود في الذاكرة (غير مسجل)؟
-                        if user_id not in USER_CACHE:
-                                # حفظ البيانات المطلوبة لإكمال الطلب لاحقاً بعد أخذ الرقم
-                                context.user_data.update({
-                                        'state': 'WAIT_RIDER_PHONE',
-                                        'pending_order_driver': driver_id
-                                })
-                                await update.message.reply_text(
-                                        f"👋 أهلاً بك يا {first_name}\n"
-                                        "أنت مستخدم جديد. لإتمام طلبك لهذا الكابتن، **يرجى إرسال رقم جوالك أولاً**:",
-                                        parse_mode=ParseMode.MARKDOWN
-                                )
-                                return 
+                context.user_data.update({
+                    'driver_to_order': driver_id,
+                    'state': 'WAIT_TRIP_DETAILS'
+                })
 
-                        # 2. إذا كان المستخدم مسجلاً مسبقاً، يكمل لطلب تفاصيل الرحلة
-                        context.user_data.update({
-                                'driver_to_order': driver_id,
-                                'state': 'WAIT_TRIP_DETAILS'
-                        })
-                        
-                        await update.message.reply_text(
-                                "📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n"
-                                "(مثال: من الراشد مول إلى الحرم، الوقت 9 مساءً)",
-                                reply_markup=ReplyKeyboardMarkup(
-                                        [[KeyboardButton("❌ إلغاء الطلب")]], 
-                                        resize_keyboard=True
-                                ),
-                                parse_mode=ParseMode.MARKDOWN
-                        )
-                        return 
-
-                except Exception as e:
-                        print(f"Deep Link Error: {e}")
-                        await update.message.reply_text("⚠️ حدث خطأ في الرابط، يرجى المحاولة مجدداً.")
-                        return
-
-            
+                await update.message.reply_text(
+                    f"👋 أهلاً بك يا {first_name}\n📝 **يرجى كتابة تفاصيل مشوارك الآن:**\n(مثال: من حي الخالدية إلى الراشد مول، الساعة 8)",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return 
+            except Exception as e:
+                print(f"Error in order_ ID: {e}")
 
         # --- حالة (order_general): الطلب العام ---
         elif arg_value == "order_general":
@@ -835,23 +843,22 @@ async def complete_registration(update, context, name):
     user = update.effective_user
     user_id = user.id
     chat_id = update.effective_chat.id
+    # الحصول على المعرف (Username) إذا وجد
     username = f"@{user.username}" if user.username else "لا يوجد معرف"
     
     role = context.user_data.get('reg_role')
+    # للراكب سيكون الرقم أصفار لأننا سجلناه مباشرة
     phone = context.user_data.get('reg_phone', '0000000000')
-
-    # جلب معرفات الصور من الذاكرة (للسائق فقط)
-    id_photo = context.user_data.get('id_photo')
-    license_photo = context.user_data.get('license_photo')
 
     conn = get_db_connection()
     if not conn: 
         return
 
     try:
-        # المرحلة 1: الحفظ في قاعدة البيانات (Supabase)
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # الراكب مفعل تلقائياً، السائق يحتاج مراجعة
             is_verified = True if role == 'rider' else False
+
             cur.execute("""
                 INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
                 VALUES (%s, %s, %s, %s, %s, %s)
@@ -864,37 +871,55 @@ async def complete_registration(update, context, name):
             """, (user_id, chat_id, role, name, phone, is_verified))
             conn.commit()
             
+        # مزامنة الكاش بعد نجاح العملية في القاعدة
         await sync_all_users()
+        context.user_data.clear()
 
-        # المرحلة 2: التعامل مع المخرجات بناءً على الدور
+        # --- معالجة مخرجات التسجيل بناءً على الدور ---
+        
         if role == 'driver':
-            # أ) إرسال تأكيد للسائق
+            # أزرار التواصل الشفافة
             support_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💬 مراسلة الإدارة", callback_data="contact_admin_start")],
                 [InlineKeyboardButton("👤 الحساب المباشر", url="https://t.me/x3FreTx")]
             ])
             
+            # إرسال رسالة "قيد المراجعة" للسائق
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=(f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\n"
-                      "حسابك وصورك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار."),
+                text=(
+                    f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\n"
+                    "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!\n\n"
+                    "📞 يمكنك التواصل معنا مباشرة عبر الأزرار التالية:"
+                ),
                 reply_markup=support_kb,
                 parse_mode="Markdown"
             )
 
-            # ب) إرسال إشعارات للمشرفين
-            admin_kb = InlineKeyboardMarkup([
+            # إرسال الكيبورد الرئيسي للسائق (غير مفعل)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="📋 قائمة التحكم الخاصة بك:",
+                reply_markup=get_main_kb('driver', False)
+            )
+        
+        
+
+            
+            # زر القبول والرفض للأدمن
+            kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
             ])
             
             admin_text = (
-                f"<b>🔔 طلب انضمام كابتن جديد</b>\n"
+                f"🔔 **تسجيل كابتن جديد للمراجعة**\n"
                 f"─────────────────\n"
-                f"<b>👤 الاسم:</b> {name}\n"
-                f"<b>📱 الجوال:</b> <code>{phone}</code>\n"
-                f"<b>🆔 المعرف:</b> {username}\n"
-                f"<b>📄 ID:</b> <code>{user_id}</code>"
+                f"👤 **الاسم:** {name}\n"
+                f"📱 **الجوال:** `{phone}`\n"
+                f"🆔 **المعرف:** {username}\n"
+                f"🔗 **رابط الحساب:** [اضغط هنا](tg://user?id={user_id})\n"
+                f"📄 **ID العمل:** `{user_id}`"
             )
             
             for aid in ADMIN_IDS:
@@ -902,36 +927,27 @@ async def complete_registration(update, context, name):
                     await context.bot.send_message(
                         chat_id=aid, 
                         text=admin_text, 
-                        reply_markup=admin_kb,
-                        parse_mode="HTML"
+                        reply_markup=kb,
+                        parse_mode=ParseMode.MARKDOWN
                     )
-                    # إرسال الصور للأدمن للمراجعة
-                    if id_photo:
-                        await context.bot.send_photo(chat_id=aid, photo=id_photo, caption="🪪 صورة الهوية")
-                    if license_photo:
-                        await context.bot.send_photo(chat_id=aid, photo=license_photo, caption="📜 رخصة القيادة")
-                except Exception as e:
-                    print(f"Error notifying admin {aid}: {e}")
-
+                except: pass
+        
+        # --- حالة الراكب (بدون إشعار للأدمن) ---
         else:
-            # حالة الراكب (Rider)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🎉 **يا هلا بيك يا {name}**\nتم تفعيل حسابك كراكب بنجاح!",
+                text=f"🎉 **يا هلا بيك يا {name}**\nتم تفعيل حسابك كراكب بنجاح، تقدر تطلب مشاويرك من الحين!",
                 reply_markup=get_main_kb('rider', True)
             )
 
     except Exception as e:
         print(f"Error registration: {e}")
+        # محاولة إرسال رسالة خطأ للمستخدم
         try:
             await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
         except: pass
     finally:
-        if conn:
-            conn.close()
-        # تنظيف الذاكرة المؤقتة لبيانات التسجيل
-        context.user_data.clear()
-
+        conn.close()
 
 # --- طلب الرحلات ---
 
@@ -1043,47 +1059,23 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. استلام الاسم
     if state == 'WAIT_NAME':
-        context.user_data['reg_name'] = text
-        context.user_data['state'] = 'WAIT_PHONE'
-        await update.message.reply_text("📱 ممتاز، الآن أرسل رقم جوالك (مثال: 05xxxxxxxx):")
-        return
-
-    # 2. استلام الهاتف والانتقال للهوية
-    elif state == 'WAIT_PHONE':
-        phone_input = text.strip()
-        if not re.fullmatch(r'05\d{8}', phone_input):
-            await update.message.reply_text("⚠️ الرقم غير صحيح، يجب أن يتكون من 10 أرقام ويبدأ بـ 05")
+            context.user_data['reg_name'] = text
+            context.user_data['state'] = 'WAIT_PHONE'
+            await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
             return
-        
-        context.user_data['reg_phone'] = phone_input
-        context.user_data['state'] = 'WAIT_ID_PHOTO' # الحالة الجديدة
-        await update.message.reply_text("🪪 شكراً لك. الآن يرجى إرسال **صورة الهوية الوطنية** (صورة واضحة):")
-        return
 
-    # 3. استلام صورة الهوية والانتقال للرخصة
-        # 3. استلام صورة الهوية والانتقال للرخصة
-    elif state == 'WAIT_ID_PHOTO':
-        # نتحقق أولاً إذا كانت الرسالة تحتوي على صورة
-        if update.message.photo:
-            # نأخذ أكبر حجم للصورة المرسلة (آخر عنصر في المصفوفة)
-            context.user_data['id_photo'] = update.message.photo[-1].file_id
-            context.user_data['state'] = 'WAIT_LICENSE_PHOTO'
-            await update.message.reply_text("✅ تم استلام الهوية بنجاح.\n\nالآن يرجى إرسال **صورة رخصة القيادة**:")
-        else:
-            # إذا أرسل المستخدم نصاً بدلاً من صورة
-            await update.message.reply_text("⚠️ عذراً، يجب إرسال (صورة) واضحة للهوية الوطنية وليس نصاً.")
-        return
-
-    # 4. استلام صورة الرخصة والإنهاء
-    elif state == 'WAIT_LICENSE_PHOTO':
-        if update.message.photo:
-            context.user_data['license_photo'] = update.message.photo[-1].file_id
-            full_name = context.user_data.get('reg_name')
-            # استدعاء دالة الحفظ النهائي
-            await complete_registration(update, context, full_name)
-        else:
-            await update.message.reply_text("⚠️ يرجى إرسال (صورة) لرخصة القيادة.")
-        return
+    if state == 'WAIT_PHONE':
+            phone_input = text.strip()
+            # التحقق من صحة الرقم (يبدأ بـ 05 و 10 أرقام)
+            if not re.fullmatch(r'05\d{8}', phone_input):
+                await update.message.reply_text("⚠️ **الرقم غير صحيح..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
+                return
+            
+            # الحفظ والإتمام
+            context.user_data['reg_phone'] = phone_input
+            await complete_registration(update, context, context.user_data['reg_name'])
+            context.user_data['state'] = None
+            return
 
     # المرحلة 1: استلام التفاصيل والانتقال للسعر
     if state == 'WAIT_RIDE_DETAILS':
@@ -1325,9 +1317,6 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['state'] = 'WAIT_LOCATION_FOR_ORDER' 
         return
-        
-        
-
     # --- د) إعدادات السائقين والبحث ---
     if state == 'WAIT_DISTRICTS':
         conn = get_db_connection()
@@ -1831,24 +1820,14 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
-        # تعريف المستخدم أولاً لتجنب الخطأ
-        user = update.effective_user 
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
-        
         if role == "rider":
-            context.user_data['state'] = 'WAIT_RIDER_PHONE'
-            # تأكد من استخدام query.edit_message_text لأن الطلب قادم من ضغطة زر
-            await query.edit_message_text(
-                text=f"👋 **أهلاً بك يا {user.first_name}**\n\nلإتمام عملية التسجيل، فضلاً أرسل **رقم جوالك** (مثال: 05xxxxxxxx):",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
+            await complete_registration(update, context, f"{user.first_name} {user.last_name or ''}".strip())
         else:
             context.user_data['state'] = 'WAIT_NAME'
-            await query.edit_message_text(
-                text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", 
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
 
     elif data == "driver_home" or data == "main_menu":
         user_id = update.effective_user.id
@@ -2410,143 +2389,111 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user = update.effective_user
-    text = update.message.text.lower()
-    msg_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
+    text = update.message.text
+    # 1. تنظيف النص (يجب أن تكون دالة normalize_text موجودة في ملفك)
+    msg_clean = normalize_text(text)
 
-    # 1. منع الطلبات الشهرية
-        # 1. منع الطلبات الشهرية وتحويلها للأدمن
-    FORBIDDEN = ["شهري", "عقد", "راتب", "دوام"]
-    if any(k in msg_clean for k in FORBIDDEN):
-        # تجهيز رابط المراسلة السريعة (رابط تليجرام المباشر)
-        contact_url = f"tg://user?id={user.id}"
-        if user.username:
-            contact_url = f"https://t.me/{user.username}"
-
-        # تجهيز تقرير للأدمن مع زر المراسلة
-        admin_report = (
-            f"⚠️ **طلب شهري جديد محجوب:**\n\n"
-            f"👤 العميل: {user.full_name}\n"
-            f"🆔 الآيدي: `{user.id}`\n\n"
-            f"💬 نص الطلب:\n_{text}_"
-        )
-        
-        admin_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💬 مراسلة العميل فوراً", url=contact_url)]
-        ])
-
-        # إرسال التقرير لكل الأدمن
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id, 
-                    text=admin_report, 
-                    reply_markup=admin_kb,
-                    parse_mode="Markdown"
-                )
-            except:
-                pass
-        
-        # حذف الطلب من الجروب
-        try: await update.message.delete()
-        except: pass
-
-        # إرسال رسالة توضيحية للعميل
-        try:
-            await context.bot.send_message(user.id, "⚠️ الطلبات الشهرية ممنوعة في الجروب، تم تحويل طلبك للإدارة وسنتواصل معك.")
-        except:
-            pass
-        return
-
-
-    # 2. تعريف الكلمات المفتاحية
-    # كلمات تميز "توصيل الطلبات" (مناديب)
-        # 2. تعريف الكلمات المفتاحية الشاملة لتوصيل الطلبات
-    DELIVERY_KEYWORDS = [
-        "طلب", "طلبات", "غرض", "اغراض", "مطعم", "عشاء", "غداء", "فطور", 
-        "تموينات", "بقالة", "بقاله", "هدية", "هديه", "توصيل طلب", "توصيل اغراض", 
-        "طرد", "شحنة", "شحنه", "مكتبة", "مكتبه", "صيدلية", "صيدليه", "علاج"
+    # 2. تعريف قوائم الكلمات (يجب تعريفها في البداية لتجنب الأخطاء)
+    REQUEST_KEYWORDS = [
+        "توصيل", "طلب", "طلبات", "غرض", "اغراض", "مقاضي", "مشوار", "مشاوير", "روحه", "جيه", "توصيلة", "توصيله", 
+        "كابتن", "سواق", "سائق", "سيارة", "سياره", "ابي", "ابغى", "محتاج", "في احد", "وديني", "استلام", 
+        "مطعم", "اكل", "وجبة", "عشاء", "غداء", "فطور", "سحور", "حلويات", "كوفي", "قهوة", "عصير", "البيك", 
+        "تموينات", "بقالة", "خضار", "هدية", "ورد", "باقة", "كيك", "شحنه", "طرد", "صيدلية", "علاج", "دواء",
+        "دوام", "عمل", "جامعة", "كلية", "مدرسة", "معهد", "الحرم", "المطار", "مستشفى", "موعد", "سوق", "بنات"
     ]
 
-    
-    # (تم حذف قائمة RIDE_KEYWORDS لأننا سنرد على "الكل" الآن)
+    SPAM_KEYWORDS = [
+        "شهري", "حل واجبات", "راتب", "استثمار", "ربح سريع", "تداول", 
+        "منصة استثمار", "تسديد ديون", "قرض", "تمويل شخصي", "زيادة متابعين", 
+        "بيع حسابات", "عملات رقمية", "بوت ربح", "هدية مالية", "مسابقة كبرى"
+    ]
 
-    # 3. محاولة استخراج الحي من الرسالة
+    # 3. نظام الحماية من الاحتيال (فحص فوري)
+    if any(k in msg_clean for k in SPAM_KEYWORDS):
+        contact_url = f"tg://user?id={user.id}"
+        if user.username: contact_url = f"https://t.me/{user.username}"
+        
+        admin_report = (f"⚠️ **رسالة محجوبة:**\n👤 العميل: {user.full_name}\n🆔 الآيدي: `{user.id}`\n💬 النص: {text}")
+        admin_kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 مراسلة العميل", url=contact_url)]])
+
+        for admin_id in ADMIN_IDS:
+            try: await context.bot.send_message(chat_id=admin_id, text=admin_report, reply_markup=admin_kb, parse_mode="Markdown")
+            except: pass
+        
+        try: await update.message.delete()
+        except: pass
+        return
+
+    # 4. البحث عن الحي في الرسالة
     found_dist = None
     districts_list = CITIES_DISTRICTS.get("المدينة المنورة", [])
-    for dist in districts_list:
-        clean_dist = dist.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا")
-        if clean_dist in msg_clean:
+    for dist in sorted(districts_list, key=len, reverse=True):
+        if normalize_text(dist) in msg_clean:
             found_dist = dist
             break
 
-    # 4. معالجة الرسائل التي "لا تحتوي على اسم حي"
-    if not found_dist:
-        # أ) إذا كانت الرسالة استفسار عن "توصيل طلبات" تحديداً -> نرسل التوجيه التعليمي
-        if any(k in msg_clean for k in DELIVERY_KEYWORDS):
-            instruction_text = (
-                "💡 **طريقة طلب مندوب توصيل:**\n\n"
-                "للعثور على المندوبين، يرجى كتابة **نوع الطلب** مع **اسم الحي**.\n\n"
-                "📝 *مثال صحيح:*\n"
-                "\"ابي توصيل طلبات في حي العزيزية\""
-            )
-            await update.message.reply_text(instruction_text, parse_mode=ParseMode.MARKDOWN)
-            return
+    # 5. التحقق من الحالات (أدمن، طلب، حي)
+    is_admin_run = (msg_clean.strip() == "رن" and user.id in ADMIN_IDS)
+    has_request = any(k in msg_clean for k in REQUEST_KEYWORDS)
 
-        # ب) أي كلمة أخرى (مجهولة) -> نعرض القائمة الترحيبية الشاملة
-        else:
-            welcome_kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🚕 تسجيل كابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
-                    InlineKeyboardButton("📱 طلب مشوار", url=f"https://t.me/{context.bot.username}?start=order_general")
-                ],
-                [
-                    InlineKeyboardButton("📋 كباتن توصيل الطلبات (المعتمدين من الادارة)", callback_data="show_all_delivery")
-                ],
-                [
-                    InlineKeyboardButton("🛍️ مطاعم/متاجر تعليمات توصيل الطلبات", callback_data="help_delivery_orders")
-                ]
-            ])
-            await update.message.reply_text(
-                f"مرحباً بك يا {user.first_name} 🌴\nلطلب مشوار أو توصيل، يرجى تحديد الحي أو الاختيار من القائمة:", 
-                reply_markup=welcome_kb, 
-                parse_mode=ParseMode.MARKDOWN
-            )
+    # الحالة أ: أمر "رن" أو وجود "طلب" بدون ذكر "الحي"
+    if is_admin_run or (has_request and not found_dist):
+        welcome_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚕 تسجيل كابتن", url=f"https://t.me/{context.bot.username}?start=driver_reg"),
+                InlineKeyboardButton("📱 طلب مشوار", url=f"https://t.me/{context.bot.username}?start=order_general")
+            ],
+            [InlineKeyboardButton("📋 المندوبين المعتمدين", callback_data="show_all_delivery")],
+            [InlineKeyboardButton("🛍️ تعليمات المتاجر", callback_data="help_delivery_orders")]
+        ])
+        
+        await update.message.reply_text(
+            f"🌴 **حياك الله في {context.bot.name}** 🌴\n\n"
+            f"يا {user.first_name}، لخدمتك بشكل أسرع:\n"
+            f"✅ اكتب طلبك مع **اسم الحي** في رسالة واحدة.\n"
+            f"أو اختر من القائمة التالية:", 
+            reply_markup=welcome_kb,
+            parse_mode="Markdown"
+        )
+        
+        if is_admin_run:
+            try: await update.message.delete()
+            except: pass
         return
 
-    # 5. إذا وجد الحي -> الفصل التام بين (المناديب) و (الكباتن)
-    await sync_all_users()
-    
-    # التحقق: هل الطلب يحتوي على كلمات "توصيل طلبات"؟
-    is_delivery_order = any(word in msg_clean for word in DELIVERY_KEYWORDS)
-    
-    matched_drivers = []
-    type_msg = ""
+    # الحالة ب: وجود "طلب" مع "الحي" -> إظهار الكباتن
+     # 5. إذا وجد الحي والطلب (عرض جميع السائقين)
+       # 3. تعديل المنطق: إذا وجد الحي، نعرض السائقين فوراً
+    if found_dist:
+        await sync_all_users()
+        # جلب جميع السائقين في هذا الحي
+        matched_drivers = [d for d in CACHED_DRIVERS if found_dist in str(d.get('districts', ''))]
 
-    if is_delivery_order:
-        # 🟢 المسار الأول: طلبات توصيل أغراض
-        # يبحث فقط عن المندوبين (من لديهم وسم "توصيل")
-        # لن يتم عرض كباتن المشاوير هنا نهائياً
-        matched_drivers = [
-            d for d in CACHED_DRIVERS 
-            if "توصيل" in str(d.get('districts', '')) and found_dist in str(d.get('districts', ''))
-        ]
-        type_msg = "📦 مندوبين توصيل"
-    else:
-        # 🟡 المسار الثاني: مشاوير ركاب (أو أي شيء آخر مع ذكر الحي)
-        # يبحث عن كباتن المشاوير فقط (يستبعد المندوبين)
-        matched_drivers = [
-            d for d in CACHED_DRIVERS 
-            if "توصيل" not in str(d.get('districts', '')) and found_dist in str(d.get('districts', ''))
-        ]
-        type_msg = "🚖 كباتن مشاوير"
-
-    # عرض النتائج
-    if matched_drivers:
-        kb = [[InlineKeyboardButton(f"📞 اطلب {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")] for d in matched_drivers[:5]]
-        await update.message.reply_text(f"✅ وجدنا **{type_msg}** في حي **{found_dist}**:", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-    else:
-        # رسالة عدم التوفر (حسب النوع المحدد)
-        await update.message.reply_text(f"📍 حي {found_dist}: لا يوجد {type_msg} متاحين حالياً.")
+        if matched_drivers:
+            
+            random.shuffle(matched_drivers)
+            
+            keyboard = []
+            current_row = []
+            for d in matched_drivers:
+                button = InlineKeyboardButton(f"📞 {d['name']}", url=f"https://t.me/{context.bot.username}?start=order_{d['user_id']}")
+                current_row.append(button)
+                if len(current_row) == 2:
+                    keyboard.append(current_row)
+                    current_row = []
+            if current_row: keyboard.append(current_row)
+            
+            await update.message.reply_text(
+                f"✅ وجدنا **{len(matched_drivers)}** كابتن في حي **{found_dist}**:", 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            # نرد بعدم التوفر فقط إذا كان الكلام أصلاً يحتوي على "كلمة طلب"
+            # لكي لا يحرج البوت نفسه بالرد "لا يوجد" على شخص ذكر اسم الحي صدفة
+            if has_request:
+                await update.message.reply_text(f"📍 حي {found_dist}: لا يوجد كباتن متاحين حالياً.")
+        return # إنهاء المعالجة هنا
 
 async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال رسالة من الأدمن لمستخدم: /send ID الرسالة"""
