@@ -424,14 +424,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- حالة (reg_rider): بدء مراحل التسجيل كراكب ---
         # --- حالة (reg_rider): التسجيل برقم الجوال فقط ---
         elif arg_value == "reg_rider":
-            # نأخذ الاسم الأول من تليجرام كاسم افتراضي
             context.user_data['temp_name'] = first_name 
             context.user_data['state'] = 'WAIT_RIDER_PHONE'
+            
+            # زر لمشاركة الرقم بشكل آلي وآمن
+            keyboard = [[KeyboardButton("📱 مشاركة رقم الجوال", request_contact=True)]]
+            
             await update.message.reply_text(
-                f"🎉 **حياك الله يا {first_name}!**\nلإتمام التسجيل، فضلاً أرسل **رقم جوالك** (مثال: 05xxxxxxxx):",
+                f"🎉 **حياك الله يا {first_name}!**\n\nلإتمام التسجيل، فضلاً اضغط على الزر أدناه لمشاركة رقم جوالك:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
+
 
 
 
@@ -832,9 +837,20 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ["reg_rider", "reg_driver"]:
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
+        
         if role == "rider":
-            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-            await complete_registration(update, context, f"{user.first_name} {user.last_name or ''}".strip())
+            # بدلاً من الإتمام الفوري، نطلب رقم الجوال
+            context.user_data['state'] = 'WAIT_RIDER_PHONE'
+            # نرسل رسالة جديدة تحتوي على زر مشاركة الرقم
+            keyboard = [[KeyboardButton("📱 مشاركة رقم الجوال", request_contact=True)]]
+            await query.message.reply_text(
+                text=f"🎉 **أهلاً بك يا {user.first_name} في نظام الركاب**\n\nمن فضلك اضغط على الزر بالأسفل لمشاركة رقم جوالك لإتمام التسجيل:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            # حذف رسالة الانلاين السابقة لتنظيف الشات
+            try: await query.delete_message()
+            except: pass
         else:
             context.user_data['state'] = 'WAIT_NAME'
             await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
@@ -1820,11 +1836,16 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
+        user = query.from_user # التأكد من تعريف user
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
+        
         if role == "rider":
-            await query.edit_message_text(text="⏳ جاري إنشاء حسابك كراكب...")
-            await complete_registration(update, context, f"{user.first_name} {user.last_name or ''}".strip())
+            context.user_data['state'] = 'WAIT_RIDER_PHONE'
+            await query.edit_message_text(
+                text=f"🎉 **أهلاً بك يا {user.first_name}**\n\nمن فضلك أرسل **رقم جوالك** الآن بكتابته في الشات (مثال: 050xxxxxxx):",
+                parse_mode=ParseMode.MARKDOWN
+            )
         else:
             context.user_data['state'] = 'WAIT_NAME'
             await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
