@@ -1885,7 +1885,34 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. عند قبول الراكب لعرض سعر السائق (المزايدة)
     
 
-    
+        # رصد الضغط على زر المندوبين المعتمدين وإبلاغ الأدمن
+    if data == "show_all_delivery":
+        for admin_id in ADMIN_IDS:
+            try:
+                user_link = f"tg://user?id={user_id}"
+                user_name = query.from_user.first_name
+                
+                admin_msg = (
+                    "👀 **إشعار: استعلام عن المناديب**\n"
+                    "--------------------------\n"
+                    f"👤 **المستخدم:** [{user_name}]({user_link})\n"
+                    f"🆔 **المعرف:** `{user_id}`\n"
+                    f"🔎 قام بالاطلاع على قائمة المندوبين المعتمدين الآن.\n"
+                    "--------------------------"
+                )
+                
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_msg,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                print(f"Error notifying admin: {e}")
+
+        # هنا تضع الكود الخاص بك الذي يعرض قائمة المناديب للمستخدم
+        # مثلاً: await show_delivery_list(update, context)
+
     # --- قسم لوحة تحكم الأدمن ---
     elif data == "admin_stats_view":
         await query.answer("جاري تحديث البيانات...")
