@@ -751,16 +751,17 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['state'] = 'WAIT_NAME'
             await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
 
-async def complete_registration(update, context, name):
+async def complete_registration(update, context, name, phone=None, plate=None):
     user = update.effective_user
     user_id = user.id
     chat_id = update.effective_chat.id
-    # الحصول على المعرف (Username) إذا وجد
     username = f"@{user.username}" if user.username else "لا يوجد معرف"
     
     role = context.user_data.get('reg_role')
-    # للراكب سيكون الرقم أصفار لأننا سجلناه مباشرة
-    phone = context.user_data.get('reg_phone', '0000000000')
+    # إذا لم يمرر رقم هاتف (للراكب مثلاً)، نستخدم القيمة الافتراضية
+    phone = phone if phone else context.user_data.get('reg_phone', '0000000000')
+    # جلب اللوحة من المعامل أو من الذاكرة المؤقتة
+    plate = plate if plate else context.user_data.get('reg_plate', 'غير محدد')
 
     conn = get_db_connection()
     if not conn: 
@@ -768,56 +769,48 @@ async def complete_registration(update, context, name):
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # الراكب مفعل تلقائياً، السائق يحتاج مراجعة
             is_verified = True if role == 'rider' else False
 
+            # تأكد من وجود عمود plate_number في جدول users
             cur.execute("""
-                INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO users (user_id, chat_id, role, name, phone, plate_number, is_verified)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     phone = EXCLUDED.phone,
+                    plate_number = EXCLUDED.plate_number,
                     role = EXCLUDED.role,
                     is_verified = EXCLUDED.is_verified
                 RETURNING *;
-            """, (user_id, chat_id, role, name, phone, is_verified))
+            """, (user_id, chat_id, role, name, phone, plate, is_verified))
             conn.commit()
             
-        # مزامنة الكاش بعد نجاح العملية في القاعدة
         await sync_all_users()
         context.user_data.clear()
 
-        # --- معالجة مخرجات التسجيل بناءً على الدور ---
-        
         if role == 'driver':
-            # أزرار التواصل الشفافة
             support_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💬 مراسلة الإدارة", callback_data="contact_admin_start")],
                 [InlineKeyboardButton("👤 الحساب المباشر", url="https://t.me/x3FreTx")]
             ])
             
-            # إرسال رسالة "قيد المراجعة" للسائق
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\n"
-                    "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!\n\n"
-                    "📞 يمكنك التواصل معنا مباشرة عبر الأزرار التالية:"
+                    f"🚗 **بيانات السيارة:** {plate}\n"
+                    "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!"
                 ),
                 reply_markup=support_kb,
                 parse_mode="Markdown"
             )
 
-            # إرسال الكيبورد الرئيسي للسائق (غير مفعل)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="📋 قائمة التحكم الخاصة بك:",
                 reply_markup=get_main_kb('driver', False)
             )
-        
-        
 
-            
             # زر القبول والرفض للأدمن
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
@@ -829,6 +822,7 @@ async def complete_registration(update, context, name):
                 f"─────────────────\n"
                 f"👤 **الاسم:** {name}\n"
                 f"📱 **الجوال:** `{phone}`\n"
+                f"🔢 **اللوحة:** `{plate}`\n"
                 f"🆔 **المعرف:** {username}\n"
                 f"🔗 **رابط الحساب:** [اضغط هنا](tg://user?id={user_id})\n"
                 f"📄 **ID العمل:** `{user_id}`"
@@ -840,11 +834,10 @@ async def complete_registration(update, context, name):
                         chat_id=aid, 
                         text=admin_text, 
                         reply_markup=kb,
-                        parse_mode=ParseMode.MARKDOWN
+                        parse_mode="Markdown"
                     )
                 except: pass
         
-        # --- حالة الراكب (بدون إشعار للأدمن) ---
         else:
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -854,7 +847,6 @@ async def complete_registration(update, context, name):
 
     except Exception as e:
         print(f"Error registration: {e}")
-        # محاولة إرسال رسالة خطأ للمستخدم
         try:
             await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
         except: pass
@@ -1033,23 +1025,33 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. استلام الاسم
     if state == 'WAIT_NAME':
-            context.user_data['reg_name'] = text
-            context.user_data['state'] = 'WAIT_PHONE'
-            await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
-            return
+        context.user_data['reg_name'] = text
+        context.user_data['state'] = 'WAIT_PHONE'
+        await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
+        return
 
     if state == 'WAIT_PHONE':
-            phone_input = text.strip()
-            # التحقق من صحة الرقم (يبدأ بـ 05 و 10 أرقام)
-            if not re.fullmatch(r'05\d{8}', phone_input):
-                await update.message.reply_text("⚠️ **الرقم غير صحيح..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
-                return
-            
-            # الحفظ والإتمام
-            context.user_data['reg_phone'] = phone_input
-            await complete_registration(update, context, context.user_data['reg_name'])
-            context.user_data['state'] = None
+        phone_input = text.strip()
+        if not re.fullmatch(r'05\d{8}', phone_input):
+            await update.message.reply_text("⚠️ **الرقم غير صحيح..**\nلازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
+        
+        # حفظ الرقم والانتقال لطلب اللوحة
+        context.user_data['reg_phone'] = phone_input
+        context.user_data['state'] = 'WAIT_PLATE'
+        await update.message.reply_text("🔢 **ممتاز، الحين أرسل رقم لوحة السيارة:**\n(مثال: أ ب ج 1234)")
+        return
+
+    if state == 'WAIT_PLATE':
+        plate_input = text.strip()
+        # حفظ اللوحة وإتمام التسجيل
+        context.user_data['reg_plate'] = plate_input
+        
+        # استدعاء دالة الإتمام (تأكد من تعديلها لتستقبل اللوحة أيضاً)
+        await complete_registration(update, context, context.user_data['reg_name'], context.user_data['reg_phone'], plate_input)
+        
+        context.user_data['state'] = None
+        return
 
     # المرحلة 1: استلام التفاصيل والانتقال للسعر
     if state == 'WAIT_RIDE_DETAILS':
