@@ -1485,21 +1485,27 @@ async def admin_panel_view(update, context):
         await update.message.reply_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: list, rider_id: int, status_msg_id: int):
-    """انتظار 5 دقائق مع تحديث الوقت ثم حذف الطلب وإرجاع القائمة المناسبة للمستخدم"""
+    """انتظار 5 دقائق مع تحديث الوقت، وحذف رسالة البحث فور القبول أو الانتهاء"""
     try:
-        # 1. جلب بيانات المستخدم من الكاش لتحديد القائمة المناسبة لاحقاً
+        # 1. جلب بيانات المستخدم
         await sync_all_users()
         user_data = USER_CACHE.get(rider_id) or USER_CACHE.get(str(rider_id)) or {}
         user_role = user_data.get('role', 'rider')
         is_verified = user_data.get('is_verified', False)
 
-        # 2. العداد التنازلي (تحديث كل دقيقة)
+        # 2. العداد التنازلي
         for minutes_left in range(5, 0, -1):
-            # التأكد من حالة الطلب في ذاكرة التطبيق
-            current_status = context.application.user_data.get(rider_id, {}).get('order_status')
-            if current_status == 'ACCEPTED':
-                return # توقف المؤقت فوراً لأن كابتن قبل الطلب
+            # التحقق: هل تم قبول الطلب؟
+            user_context_data = context.application.user_data.get(rider_id, {})
+            if user_context_data.get('order_status') == 'ACCEPTED':
+                # --- التعديل الجوهري هنا ---
+                try:
+                    await context.bot.delete_message(chat_id=rider_id, message_id=status_msg_id)
+                except:
+                    pass # الرسالة قد تكون حذفت بالفعل
+                return # الخروج فوراً وتوقف المؤقت
 
+            # تحديث وقت الانتظار في الرسالة
             try:
                 await context.bot.edit_message_text(
                     chat_id=rider_id,
@@ -1508,22 +1514,21 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
                     parse_mode="Markdown"
                 )
             except:
-                pass # الرسالة قد تكون حُذفت يدويًا من المستخدم
+                pass 
             
             await asyncio.sleep(60)
 
-        # 3. عند انتهاء الوقت (5 دقائق) بدون قبول
+        # 3. عند انتهاء الوقت بدون قبول
         
-        # أ) حذف رسالة الطلب من عند جميع الكباتن الذين أُرسل لهم
+        # أ) حذف الطلب من عند الكباتن
         for info in messages_info:
             try:
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
             except:
                 pass 
             
-        # ب) إبلاغ الراكب وإظهار قائمته الرئيسية (سائق أو راكب)
+        # ب) حذف رسالة "جاري البحث" وإبلاغ الراكب
         try:
-            # حذف رسالة "جاري البحث" القديمة لتنظيف الشات
             await context.bot.delete_message(chat_id=rider_id, message_id=status_msg_id)
         except:
             pass
@@ -1531,22 +1536,20 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
         await context.bot.send_message(
             chat_id=rider_id, 
             text=(
-    "✨ **حالة الطلب**\n\n"
-    "✅ تم قبول الرحلة؟ بارك الله لك فيها.\n"
-    "❌ لم تُقبل؟ نعتذر منك، يرجى إعادة الطلب مرة أخرى."
-),
-
-            reply_markup=get_main_kb(user_role, is_verified), # القائمة الديناميكية هنا
+                "⚠️ **انتهى وقت البحث**\n\n"
+                "لم يتم قبول طلبك خلال 5 دقائق. يمكنك إعادة محاولة الطلب مرة أخرى إذا كنت لا تزال ترغب في ذلك."
+            ),
+            reply_markup=get_main_kb(user_role, is_verified),
             parse_mode="Markdown"
         )
         
-        # ج) تنظيف الحالة تماماً
+        # ج) تنظيف الحالة
         if rider_id in context.application.user_data:
             context.application.user_data[rider_id]['order_status'] = None
-            context.application.user_data[rider_id]['state'] = None
 
     except Exception as e:
         print(f"Error in start_order_timer: {e}")
+
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message or update.edited_message
