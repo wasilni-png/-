@@ -961,7 +961,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔙 العودة للقائمة الرئيسية":
         # 1. تصفير الحالة (State) لضمان الخروج من أي عمليات معلقة
         context.user_data['state'] = None
-        
+    
         # 2. جلب حالة التوثيق فقط (لأنها مهمة لشكل أزرار السائق)
         user_data = USER_CACHE.get(user_id) or {}
         is_verified = user_data.get('is_verified', True)
@@ -972,6 +972,26 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_kb('driver', is_verified) # قمنا بتغيير role إلى 'driver' هنا
         )
         return
+        
+    if state == 'WAIT_ADMIN_MESSAGE':
+        if text == "❌ إلغاء المراسلة":
+            context.user_data['state'] = None
+            
+            # جلب البيانات من الكاش (المرتبط بقاعدة البيانات)
+            user_info = USER_CACHE.get(user_id, {})
+            
+            # جلب القيم الحقيقية
+            # هنا البوت سيأخذ الـ role والـ is_verified كما هي في السوبابيس (Supabase)
+            role = user_info.get('role') 
+            verified_status = user_info.get('is_verified')
+
+            await update.message.reply_text(
+                "تم الإلغاء.", 
+                reply_markup=get_main_kb(role, verified_status)
+            )
+            return
+
+
     # ---------------------------------------------------------
     # [الفلتر الأول] المحادثات النشطة (Chat Relay)
     # ---------------------------------------------------------
