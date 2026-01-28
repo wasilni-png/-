@@ -1195,6 +1195,23 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # --- معالجة زر العودة للقائمة الرئيسية ---
+    if text == "🔙 العودة للقائمة الرئيسية":
+        # 1. جلب بيانات المستخدم من الكاش (أو قاعدة البيانات) لتحديد الرتبة
+        user_data = USER_CACHE.get(user_id) or {}
+        role = user_data.get('role', 'rider')  # إذا لم يوجد، نفترض أنه راكب
+        is_verified = user_data.get('is_verified', False)
+
+        # 2. تصفير الحالة (State) لضمان خروج المستخدم من أي عملية تسجيل أو طلب
+        context.user_data['state'] = None
+        
+        # 3. إرسال القائمة الرئيسية المناسبة لرتبته
+        await update.message.reply_text(
+            "🏠 تم الرجوع للقائمة الرئيسية.",
+            reply_markup=get_main_kb(role, is_verified)
+        )
+        return
+
     
 
     # --- منطق حذف العضو ---
