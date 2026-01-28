@@ -1133,11 +1133,12 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone = text.strip()
         user_info = update.effective_user
         
-        if not phone.isdigit() or len(phone) < 9:
-            await update.message.reply_text("⚠️ يرجى إرسال رقم جوال صحيح.")
+        # 1. التحقق من صحة الرقم (بدءاً بـ 05 وطول 10 أرقام)
+        if not re.fullmatch(r'05\d{8}', phone):
+            await update.message.reply_text("⚠️ الرقم غير صحيح.. لازم يبدأ بـ 05 ويتكون من 10 أرقام.")
             return
 
-        # 1. إنشاء الحساب بالرقم الحقيقي
+        # 2. إنشاء الحساب أو تحديثه في القاعدة
         conn = get_db_connection()
         if conn:
             with conn.cursor() as cur:
@@ -1145,22 +1146,22 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     INSERT INTO users (user_id, chat_id, role, name, phone, is_verified)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id) DO UPDATE 
-                    SET phone = EXCLUDED.phone, role = 'rider'
+                    SET phone = EXCLUDED.phone, role = 'rider', is_verified = True
                 """, (user_id, update.effective_chat.id, 'rider', user_info.full_name, phone, True))
                 conn.commit()
             conn.close()
             await sync_all_users(force=True)
 
-        # 2. فحص هل كان قادماً من رابط طلب؟
-                # داخل الجزء الذي أرسلته (رقم 2. فحص هل كان قادماً من رابط طلب؟)
+        # 3. فحص سبب التسجيل (رابط خارجي أم يدوي)
         pending_driver = context.user_data.get('pending_order_driver')
+        
         if pending_driver:
             if pending_driver == "general":
                 context.user_data.update({
                     'state': 'WAIT_GENERAL_DETAILS',
                     'pending_order_driver': None
                 })
-                await update.message.reply_text("✅ تم تسجيلك. الآن **اكتب تفاصيل مشوارك العام** (الوجهة والوقت):")
+                await update.message.reply_text("✅ تم تسجيلك بنجاح.\n\nالآن **أرسل وجهتك** (مثال: من حي المروج إلى العزيزية):")
             else:
                 context.user_data.update({
                     'driver_to_order': pending_driver,
@@ -1168,9 +1169,17 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'pending_order_driver': None
                 })
                 await update.message.reply_text(
-                    "✅ تم تسجيل رقمك. الآن **اكتب تفاصيل مشوارك** لإرسالها للكابتن:",
+                    "✅ تم تسجيلك بنجاح.\n\nالآن **أرسل وجهتك** لإرسالها للكابتن:",
                     reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True)
                 )
+        else:
+            # حالة التسجيل اليدوي (من داخل البوت بدون طلب مسبق)
+            context.user_data['state'] = None 
+            await update.message.reply_text(
+                "🎉 **أهلاً بك! تم إكمال تسجيلك بنجاح.**\n\nيمكنك الآن طلب رحلتك الأولى بالضغط على (🚖 طلب رحلة) من القائمة بالأسفل.",
+                reply_markup=get_main_kb("rider", True) 
+            )
+        return
 
         
     if update.message.text == "📍 تحديث موقعي":
