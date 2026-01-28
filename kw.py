@@ -58,7 +58,7 @@ def run_flask():
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
-ADMIN_IDS = [8563113166, 7580027135, 7996171713, 5027690233]
+ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
 
@@ -742,21 +742,17 @@ async def complete_registration(update, context, name, phone=None, plate=None):
     chat_id = update.effective_chat.id
     username = f"@{user.username}" if user.username else "لا يوجد معرف"
     
-    role = context.user_data.get('reg_role')
-    # إذا لم يمرر رقم هاتف (للراكب مثلاً)، نستخدم القيمة الافتراضية
+    # جلب الدور وحفظه في متغير محلي قبل مسح البيانات
+    role = context.user_data.get('reg_role', 'rider') 
     phone = phone if phone else context.user_data.get('reg_phone', '0000000000')
-    # جلب اللوحة من المعامل أو من الذاكرة المؤقتة
     plate = plate if plate else context.user_data.get('reg_plate', 'غير محدد')
 
     conn = get_db_connection()
-    if not conn: 
-        return
+    if not conn: return
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            is_verified = True if role == 'rider' else False
-
-            # تأكد من وجود عمود plate_number في جدول users
+            is_verified = (role == 'rider')
             cur.execute("""
                 INSERT INTO users (user_id, chat_id, role, name, phone, plate_number, is_verified)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -771,23 +767,24 @@ async def complete_registration(update, context, name, phone=None, plate=None):
             conn.commit()
             
         await sync_all_users()
-        context.user_data.clear()
-
+        # انقلنا المسح إلى ما بعد إتمام الفحوصات لضمان عدم فقدان البيانات
+        
         if role == 'driver':
             support_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💬 مراسلة الإدارة", callback_data="contact_admin_start")],
                 [InlineKeyboardButton("👤 الحساب المباشر", url="https://t.me/x3FreTx")]
             ])
             
+            # استخدام HTML بدلاً من Markdown لضمان عدم تعطل الإرسال بسبب الرموز
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"✅ **أبشرك تم استلام طلبك يا كابتن {name}**\n\n"
-                    f"🚗 **بيانات السيارة:** {plate}\n"
+                    f"✅ <b>أبشرك تم استلام طلبك يا كابتن {name}</b>\n\n"
+                    f"🚗 <b>بيانات السيارة:</b> {plate}\n"
                     "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!"
                 ),
                 reply_markup=support_kb,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
 
             await context.bot.send_message(
@@ -796,21 +793,20 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                 reply_markup=get_main_kb('driver', False)
             )
 
-            # زر القبول والرفض للأدمن
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
             ])
             
             admin_text = (
-                f"🔔 **تسجيل كابتن جديد للمراجعة**\n"
+                f"🔔 <b>تسجيل كابتن جديد للمراجعة</b>\n"
                 f"─────────────────\n"
-                f"👤 **الاسم:** {name}\n"
-                f"📱 **الجوال:** `{phone}`\n"
-                f"🔢 **اللوحة:** `{plate}`\n"
-                f"🆔 **المعرف:** {username}\n"
-                f"🔗 **رابط الحساب:** [اضغط هنا](tg://user?id={user_id})\n"
-                f"📄 **ID العمل:** `{user_id}`"
+                f"👤 <b>الاسم:</b> {name}\n"
+                f"📱 <b>الجوال:</b> <code>{phone}</code>\n"
+                f"🔢 <b>اللوحة:</b> <code>{plate}</code>\n"
+                f"🆔 <b>المعرف:</b> {username}\n"
+                f"🔗 <b>رابط الحساب:</b> <a href='tg://user?id={user_id}'>اضغط هنا</a>\n"
+                f"📄 <b>ID العمل:</b> <code>{user_id}</code>"
             )
             
             for aid in ADMIN_IDS:
@@ -819,24 +815,28 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                         chat_id=aid, 
                         text=admin_text, 
                         reply_markup=kb,
-                        parse_mode="Markdown"
+                        parse_mode="HTML"
                     )
-                except: pass
+                except Exception as e:
+                    print(f"Error sending to admin {aid}: {e}")
         
         else:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🎉 **يا هلا بيك يا {name}**\nتم تفعيل حسابك كراكب بنجاح، تقدر تطلب مشاويرك من الحين!",
-                reply_markup=get_main_kb('rider', True)
+                text=f"🎉 <b>يا هلا بيك يا {name}</b>\nتم تفعيل حسابك كراكب بنجاح، تقدر تطلب مشاويرك من الحين!",
+                reply_markup=get_main_kb('rider', True),
+                parse_mode="HTML"
             )
+
+        # مسح البيانات المؤقتة في نهاية العملية تماماً
+        context.user_data.clear()
 
     except Exception as e:
         print(f"Error registration: {e}")
-        try:
-            await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
-        except: pass
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
     finally:
-        conn.close()
+        if conn: conn.close()
+
 
 # --- طلب الرحلات ---
 async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1070,6 +1070,9 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. استلام الاسم
     if state == 'WAIT_NAME':
         context.user_data['reg_name'] = text
+        # --- الإضافة الهامة هنا ---
+        context.user_data['reg_role'] = 'driver' 
+        # -------------------------
         context.user_data['state'] = 'WAIT_PHONE'
         await update.message.reply_text("📱 **أبشر، الحين أرسل رقم جوالك:**\n(مثال: 05xxxxxxxx)")
         return
@@ -1088,14 +1091,20 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == 'WAIT_PLATE':
         plate_input = text.strip()
-        # حفظ اللوحة وإتمام التسجيل
-        context.user_data['reg_plate'] = plate_input
         
-        # استدعاء دالة الإتمام (تأكد من تعديلها لتستقبل اللوحة أيضاً)
-        await complete_registration(update, context, context.user_data['reg_name'], context.user_data['reg_phone'], plate_input)
+        # جلب البيانات المحفوظة في الخطوات السابقة
+        name = context.user_data.get('reg_name')
+        phone = context.user_data.get('reg_phone')
+        
+        # نؤكد أن الدور هو سائق قبل استدعاء دالة الإتمام
+        context.user_data['reg_role'] = 'driver'
+        
+        # استدعاء دالة الإتمام مع تمرير القيم مباشرة
+        await complete_registration(update, context, name, phone, plate_input)
         
         context.user_data['state'] = None
         return
+
 
     # المرحلة 1: استلام التفاصيل والانتقال للسعر
     if state == 'WAIT_RIDE_DETAILS':
