@@ -1591,17 +1591,12 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
             except:
                 pass 
             
-        # ب) حذف رسالة "جاري البحث" وإبلاغ الراكب
-        try:
-            await context.bot.delete_message(chat_id=rider_id, message_id=status_msg_id)
-        except:
-            pass
-
-         await context.bot.send_message(
+        # ب) إرسال رسالة الشكر والامتنان المختصرة
+        await context.bot.send_message(
             chat_id=rider_id, 
             text=(
-                "✨ **شكراً لثقتكم بنا ممتنون لاختياركم خدمتنا.**\n\n"
-                "يمكنك الآن إرسال طلب جديد وسنقوم بخدمتك بشكل أفضل. نحن دائماً بانتظارك! 🌹"
+                "✨ **شكراً لثقتكم بنا، ممتنون لاختياركم خدمتنا.**\n\n"
+                "يمكنك الآن تحديث موقعك وإرسال طلب جديد لنقوم بخدمتك بشكل أفضل. نحن دائماً بانتظارك! 🌹"
             ),
             reply_markup=get_main_kb(user_role, is_verified),
             parse_mode="Markdown"
