@@ -215,6 +215,25 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
 
 # ==================== 🛠️ 3. دوال مساعدة ====================
 
+
+
+# دالة تحديث قاعدة البيانات في الخلفية (خارج الدالة الرئيسية للسرعة)
+async def update_db_silent(user_id, lat, lon):
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
+                    (lat, lon, user_id)
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"❌ خطأ في تحديث قاعدة البيانات للخلفية: {e}")
+    finally:
+        if conn: conn.close()
+
 class UserRole(str, Enum):
     RIDER = "rider"
     DRIVER = "driver"
@@ -1422,17 +1441,16 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # تأكيد أخير أنها في الخاص وليست في مجموعة
         # تعديل بسيط في النهاية
-    if update.message.chat.type == "private" and text: # أضفنا شرط وجود نص
-        # ... كود إرسال الرسالة للأدمن ...
-
+    # التأكد أن الرسالة خاصة، تحتوي نصاً، والمرسل ليس من الإدارة
+    if update.message.chat.type == "private" and text and user_id not in ADMIN_IDS:
         
-        # 1. تجهيز الرسالة للأدمن
+        # 1. تجهيز الرسالة للأدمن باستخدام HTML لمنع أخطاء الرموز الخاصة
         admin_text = (
-            f"📩 **رسالة واردة (دعم فني)**\n"
-            f"👤 الاسم: {user.full_name}\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"🔗 المعرف: @{user.username if user.username else 'لا يوجد'}\n"
-            f"📝 النص: {text}\n"
+            f"📩 <b>رسالة واردة (دعم فني)</b>\n"
+            f"👤 <b>الاسم:</b> {user.full_name}\n"
+            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+            f"🔗 <b>المعرف:</b> @{user.username if user.username else 'لا يوجد'}\n"
+            f"📝 <b>النص:</b> {text}\n"
             f"─────────────────\n"
             f"💡 للرد عليه، قم بعمل (Reply) على هذه الرسالة."
         )
@@ -1445,23 +1463,32 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
 
-        # 3. الإرسال لكل المشرفين
+        # 3. الإرسال لكل المشرفين باستخدام التنسيق الجديد
         for aid in ADMIN_IDS:
             try:
-                # إرسال بطاقة المعلومات
-                await context.bot.send_message(chat_id=aid, text=admin_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-                # تحويل رسالة المستخدم الأصلية (مفيد إذا كانت صورة أو فيديو)
-                await context.bot.copy_message(chat_id=aid, from_chat_id=user_id, message_id=update.message.message_id)
-            except: pass
+                # إرسال بيانات المستخدم بتنسيق HTML
+                await context.bot.send_message(
+                    chat_id=aid, 
+                    text=admin_text, 
+                    reply_markup=kb, 
+                    parse_mode="HTML" # تم التغيير من MARKDOWN إلى HTML لضمان عدم حدوث خطأ parse
+                )
+                # تحويل الرسالة الأصلية
+                await context.bot.copy_message(
+                    chat_id=aid, 
+                    from_chat_id=user_id, 
+                    message_id=update.message.message_id
+                )
+            except Exception as e:
+                print(f"Error sending to admin {aid}: {e}")
 
         # 4. حفظ في السجل
-        # تأكد من أن دالة save_chat_log موجودة ومستوردة
         save_chat_log(user_id, ADMIN_IDS[0], text or "[ملف/موقع]", "support_msg")
 
-        # 5. إشعار المستخدم (مرة واحدة)
-        # لتجنب التكرار، نرسل التأكيد فقط إذا لم يكن في حالة تواصل مسبق
-        # (اختياري: يمكنك إزالة هذا السطر إذا كنت تراه مزعجاً)
+        # 5. إشعار المستخدم
         await update.message.reply_text("📨 تم استلام رسالتك وتحويلها لفريق الدعم.")
+        
+        return
 
 # --- معالجة المواقع (Location) ---
 
@@ -1594,11 +1621,18 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    location = msg.location
+    lat_val, lon_val = msg.location.latitude, msg.location.longitude
     state = context.user_data.get('state')
-    lat_val, lon_val = location.latitude, location.longitude
 
-    # 1. تمرير الموقع في المحادثات النشطة
+    # 1. تحديث الكاش المحلي فوراً (أهم خطوة للسرعة مع 1000 كابتن)
+    if user_id in USER_CACHE:
+        USER_CACHE[user_id]['lat'] = lat_val
+        USER_CACHE[user_id]['lon'] = lon_val
+    
+    # 2. تحديث قاعدة البيانات "في الخلفية" (بدون تعطيل البوت)
+    asyncio.create_task(update_db_silent(user_id, lat_val, lon_val))
+
+    # 3. تمرير الموقع في المحادثات النشطة (يبقى كما هو)
     partner_id = get_chat_partner(user_id)
     if partner_id:
         try:
@@ -1606,40 +1640,30 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return 
         except: pass
 
-    # 2. تحديث قاعدة البيانات
-    conn = get_db_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s", (lat_val, lon_val, user_id))
-                conn.commit()
-            await sync_all_users(force=True)
-        finally: conn.close()
-
     user_data = USER_CACHE.get(user_id) or {}
     user_role = user_data.get('role', 'rider')
-    is_verified = user_data.get('is_verified', False)
 
-    # 3. معالجة السائق
+    # 4. معالجة السائق (تحديث صامت تماماً)
     if user_role == 'driver' and state != 'WAIT_LOCATION_FOR_ORDER':
-        await msg.reply_text("📍 **تم تحديث موقعك بنجاح!**", parse_mode="Markdown", reply_markup=get_main_kb(user_role, is_verified))
+        if update.message: # حذف الرسالة فقط إذا كانت رسالة جديدة وليست تحديث "حي"
+            try: await update.message.delete()
+            except: pass
         return 
 
-    # 4. معالجة الراكب (طلب رحلة)
+    # 4. معالجة الراكب (عند طلب رحلة جديد)
     if state == 'WAIT_LOCATION_FOR_ORDER':
+        # إرسال رسالة انتظار أولية
         processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن قريباً منك...")
         
+        # إرسال الطلب للسائقين القريبين
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
             keyboard = []
-            for info in sent_info[:10]: # عرض أول 10 سائقين
+            for info in sent_info[:10]: # عرض قائمة بأول 10 كباتن وصلهم الطلب
                 d_id = info['chat_id']
                 driver_data = USER_CACHE.get(d_id) or USER_CACHE.get(str(d_id)) or {}
                 driver_name = driver_data.get('name', 'كابتن متوفر')
-                
-                # إنشاء زر يحمل اسم السائق ولكن لا يؤدي لشيء عند الضغط
-                # استخدمنا callback_data="none" لتعطيل الأكشن
                 button = [InlineKeyboardButton(text=f"🚕 {driver_name}", callback_data="none")]
                 keyboard.append(button)
 
@@ -1650,7 +1674,7 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             try:
-                # تحديث الرسالة وإضافة الأزرار
+                # تحديث رسالة البحث لتصبح رسالة التأكيد مع قائمة الكباتن
                 await context.bot.edit_message_text(
                     chat_id=user_id,
                     message_id=processing_msg.message_id,
@@ -1666,8 +1690,10 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             
+            # بدء مؤقت انتهاء الطلب
             asyncio.create_task(start_order_timer(context, sent_info, user_id, processing_msg.message_id))
         else:
+            # في حال عدم وجود سائقين في المنطقة
             await context.bot.send_message(
                 chat_id=user_id,
                 text="⚠️ نعتذر، لا يوجد كباتن متاحين حالياً في موقعك.",
@@ -1676,7 +1702,9 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await processing_msg.delete()
             except: pass
         
+        # تصفير الحالة بعد انتهاء الطلب
         context.user_data['state'] = None
+
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
@@ -2696,12 +2724,38 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 3. كلمات الطلبات العادية
     REQUEST_KEYWORDS = [
-        "توصيل", "توصيله", "توصيلة", "مشوار", "مشاوير", "روحه", "جيه", "جية", "روحة",
-        "وديني", "وصلني", "ابغاك توديني", "ياخذني", "يوديني", "محتاج سيارة", 
-        "مطلوب سيارة", "مطلوب سواق", "مطلوب كابتن", "ابي سيارة", "ابي سواق",
-        "تكسي", "تاكسي", "كداد", "كدادة", "سيارة مشوار", "بسرعه", "مستعجل",
-        "نقل", "تنقل", "طرد", "شحنة", "كرتون", "مقاضي", "اغراض", "توصيل طلبات"
-    ]
+    # --- التوصيل العام والكلمات المشتقة ---
+    "توصيل", "توصيله", "توصيلة", "توصيلات", "توصلني", "توصلني", "يوصلني", "اتوصل",
+    
+    # --- المشاوير والرحلات ---
+    "مشوار", "مشاوير", "مشوارك", "روحه", "جيه", "جية", "روحة", "طلعة", "طلعه", 
+    "رحله", "رحلة", "رايح", "جاي", "اطلع", "اتحرك", "اروح",
+    
+    # --- الطلب المباشر (اللهجة السعودية والخليجية) ---
+    "وديني", "وصلني", "ابغاك", "ابيك", "ابي", "ابغى", "توديني", "ياخذني", "يوديني", 
+    "خاوي", "يخاويني", "يوديني", "نحتاج", "محتاج", "مطلوب", "موجود", "متاح",
+    
+    # --- أنواع السيارات والسائقين ---
+    "سيارة", "سياره", "سواق", "سواقة", "كابتن", "طيار", "تاكسي", "تكسي", "كداد", 
+    "كدادة", "كدادين", "خصوصي", "ليموزين", "سيارة مشوار", "موتر", "مركب",
+    
+    # --- السرعة والاستعجال ---
+    "بسرعه", "بسرعة", "مستعجل", "الان", "الآن", "حالا", "فوراً", "فورا", "ضروري", 
+    "عاجل", "مستعجله", "مستعجلة", "بسرعه تكفون",
+    
+    # --- نقل الأغراض والطلبات (لوجستيك) ---
+    "نقل", "تنقل", "طرد", "شحنة", "شحنه", "كرتون", "مقاضي", "اغراض", "أغراض", 
+    "عفش", "حمولة", "حموله", "توصيل طلبات", "توصيل غداء", "توصيل عشاء", "امانة", "أمانة",
+    
+    # --- كلمات عامية ومناطقية إضافية ---
+    "هجولة", "هجوله", "شحن", "خط", "سفري", "سفريات", "بكم", "يوصل", "يدق", 
+    "اتصال", "لوكيشن", "الموقع", "وينك", "متوفر", "فاضي", "فارغ",
+    
+    # --- لهجات عربية أخرى (مصر والشام) ---
+    "عايز", "بدنا", "بدي", "عاوز", "توصيلة", "سرفيس", "عربية", "عربيه", "مشوارنا",
+    "تكتك", "موتوسيكل", "دراجة", "دباب", "موتر"
+]
+
 
     # --- أولاً: حماية من السبام ---
     if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
@@ -3183,7 +3237,10 @@ def main():
     
     
     
-    
+    application.add_handler(MessageHandler(
+    filters.LOCATION & filters.UpdateType.EDITED_MESSAGE, 
+    location_handler
+), group=1)
 
     # ---------------------------------------------------------
     # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
