@@ -943,9 +943,33 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- المعالج الشامل (Global Handler) ---
 async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1. التحقق من وجود رسالة (أهم خطوة لمنع الانهيار)
+    if not update.message:
+        return
+
+    # 2. استخراج البيانات بأمان (تعديل جوهري هنا)
+    user = update.effective_user
+    if not user: return # حماية إضافية إذا لم يستطع البوت التعرف على المستخدم
+    
+    user_id = user.id
     state = context.user_data.get('state')
-    text = update.message.text
-    user_id = update.effective_user.id
+    
+    # استخراج النص مع ضمان عدم كونه None حتى لو كانت الرسالة صورة أو موقع
+    text = update.message.text.strip() if update.message.text else ""
+
+    # ---------------------------------------------------------
+    # [الفلتر الأول] المحادثات النشطة (Chat Relay)
+    # ---------------------------------------------------------
+    # إذا كان المستخدم يتحدث حالياً مع طرف آخر (كابتن/راكب)، اخرج فوراً
+    if get_chat_partner(user_id):
+        return 
+
+    # ---------------------------------------------------------
+    # [الفلتر الثاني] معالجة الموقع (Location)
+    # ---------------------------------------------------------
+    if update.message.location:
+        # سواء كان لطلب أو تحديث عادي، نحوله لدالة الموقع ونخرج
+        return await location_handler(update, context)
 
         # --- [تعديل] خطوات تسجيل السائق المحدثة ---
     # استلام سعر المزايدة من السائق
@@ -1043,28 +1067,12 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not update.message: return
+    
     
     # استخراج البيانات
-    user = update.effective_user
-    user_id = user.id
-    state = context.user_data.get('state')
-    # نستخدم النص إذا وجد، وإلا نص فارغ (لتجنب الأخطاء مع الصور)
-    text = update.message.text if update.message.text else ""
-
-    # ---------------------------------------------------------
-    # [الفلتر الأول] المحادثات النشطة (Chat Relay)
-    # ---------------------------------------------------------
-    # إذا كان المستخدم يتحدث حالياً مع طرف آخر (كابتن/راكب)، اخرج فوراً
-    if get_chat_partner(user_id):
-        return 
-
-    # ---------------------------------------------------------
-    # [الفلتر الثاني] معالجة الموقع (Location)
-    # ---------------------------------------------------------
-    if update.message.location:
-        # سواء كان لطلب أو تحديث عادي، نحوله لدالة الموقع ونخرج
-        return await location_handler(update, context)
+    
+    
+    
 
     # ---------------------------------------------------------
     # [الفلتر الثالث] معالجة حالات البوت (States)
@@ -1367,7 +1375,10 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إذن هي --> رسالة استفسار/دعم فني.
 
     # تأكيد أخير أنها في الخاص وليست في مجموعة
-    if update.message.chat.type == "private":
+        # تعديل بسيط في النهاية
+    if update.message.chat.type == "private" and text: # أضفنا شرط وجود نص
+        # ... كود إرسال الرسالة للأدمن ...
+
         
         # 1. تجهيز الرسالة للأدمن
         admin_text = (
@@ -1572,34 +1583,40 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
-            # بناء قائمة نصية بأسماء السائقين
-            drivers_list_text = ""
-            for i, info in enumerate(sent_info[:10], 1):
+            keyboard = []
+            for info in sent_info[:10]: # عرض أول 10 سائقين
                 d_id = info['chat_id']
                 driver_data = USER_CACHE.get(d_id) or USER_CACHE.get(str(d_id)) or {}
                 driver_name = driver_data.get('name', 'كابتن متوفر')
-                drivers_list_text += f"{i} - 🚕 **{driver_name}**\n"
+                
+                # إنشاء زر يحمل اسم السائق ولكن لا يؤدي لشيء عند الضغط
+                # استخدمنا callback_data="none" لتعطيل الأكشن
+                button = [InlineKeyboardButton(text=f"🚕 {driver_name}", callback_data="none")]
+                keyboard.append(button)
 
             final_text = (
                 f"✅ **تم تعميم طلبك بنجاح!**\n\n"
-                f"وصل طلبك إلى {len(sent_info)} كابتن متواجدين حالياً:\n"
-                f"{drivers_list_text}\n"
+                f"وصل طلبك إلى **{len(sent_info)}** كابتن متواجدين حالياً.\n"
                 f"⏳ يرجى الانتظار، سيتم التواصل معك هنا فور قبول أحدهم."
             )
 
             try:
-                # تعديل الرسالة وحذف أي أزرار (None)
+                # تحديث الرسالة وإضافة الأزرار
                 await context.bot.edit_message_text(
                     chat_id=user_id,
                     message_id=processing_msg.message_id,
                     text=final_text,
-                    reply_markup=None, # إزالة الأزرار تماماً
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="Markdown"
                 )
             except:
-                await context.bot.send_message(chat_id=user_id, text=final_text, parse_mode="Markdown")
+                await context.bot.send_message(
+                    chat_id=user_id, 
+                    text=final_text, 
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
             
-            # تشغيل العداد لإلغاء الطلب إذا لم يستجب أحد
             asyncio.create_task(start_order_timer(context, sent_info, user_id, processing_msg.message_id))
         else:
             await context.bot.send_message(
@@ -1611,7 +1628,6 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         
         context.user_data['state'] = None
-
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
