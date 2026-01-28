@@ -1529,7 +1529,6 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
         print(f"Error in start_order_timer: {e}")
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. استلام الرسالة (سواء كانت جديدة أو تحديث موقع مباشر)
     msg = update.message or update.edited_message
     if not msg or not msg.location:
         return
@@ -1537,94 +1536,81 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     location = msg.location
     state = context.user_data.get('state')
-    
-    # استخراج الإحداثيات
     lat_val, lon_val = location.latitude, location.longitude
 
-    # --- الخطوة 1: فحص المحادثة النشطة (تمرير الموقع للطرف الآخر) ---
+    # 1. تمرير الموقع في المحادثات النشطة
     partner_id = get_chat_partner(user_id)
     if partner_id:
         try:
             await context.bot.copy_message(chat_id=partner_id, from_chat_id=user_id, message_id=msg.message_id)
             return 
-        except Exception as e:
-            print(f"❌ فشل تمرير الموقع: {e}")
+        except: pass
 
-    # --- الخطوة 2: جلب بيانات المستخدم وتحديث قاعدة البيانات ---
-    await sync_all_users() # لضمان معرفة دور المستخدم الحالي
-    user_data = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id)) or {}
-    user_role = user_data.get('role', 'rider')
-    is_verified = user_data.get('is_verified', False)
-
-    # تحديث الإحداثيات في قاعدة البيانات لجميع المستخدمين (للدقة)
+    # 2. تحديث قاعدة البيانات
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() 
-                    WHERE user_id = %s
-                """, (lat_val, lon_val, user_id))
+                cur.execute("UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s", (lat_val, lon_val, user_id))
                 conn.commit()
             await sync_all_users(force=True)
-        except Exception as e:
-            print(f"❌ خطأ في قاعدة البيانات: {e}")
-        finally:
-            conn.close()
+        finally: conn.close()
 
-    # --- الخطوة 3: التمييز بين السائق والراكب لمنع التداخل ---
+    user_data = USER_CACHE.get(user_id) or {}
+    user_role = user_data.get('role', 'rider')
+    is_verified = user_data.get('is_verified', False)
 
-    # أ) حالة السائق (تحديث موقع عادي)
+    # 3. معالجة السائق
     if user_role == 'driver' and state != 'WAIT_LOCATION_FOR_ORDER':
-        await msg.reply_text(
-            "📍 **تم تحديث موقعك بنجاح!**\nعُدت الآن إلى القائمة الرئيسية ويمكنك استقبال الطلبات.",
-            parse_mode="Markdown",
-            reply_markup=get_main_kb(user_role, is_verified) 
-        )
+        await msg.reply_text("📍 **تم تحديث موقعك بنجاح!**", parse_mode="Markdown", reply_markup=get_main_kb(user_role, is_verified))
         return 
 
-    # ب) حالة الراكب (طلب رحلة عبر الموقع)
-    if user_role == 'rider' and state == 'WAIT_LOCATION_FOR_ORDER':
-        # تخزين الرسالة في متغير لاستخدام الـ ID الخاص بها في العداد
+    # 4. معالجة الراكب (طلب رحلة)
+    if state == 'WAIT_LOCATION_FOR_ORDER':
         processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن قريباً منك...")
         
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
-            keyboard = []
-            for i in range(0, len(sent_info[:10]), 2):
-                row = []
-                for info in sent_info[i:i+2]:
-                    d_id = info['chat_id']
-                    d_name = USER_CACHE.get(d_id, {}).get('name', 'كابتن')
-                    row.append(InlineKeyboardButton(text=f"📞 {d_name}", url=f"https://t.me/{context.bot.username}?start=order_{d_id}"))
-                keyboard.append(row)
+            # بناء قائمة نصية بأسماء السائقين
+            drivers_list_text = ""
+            for i, info in enumerate(sent_info[:10], 1):
+                d_id = info['chat_id']
+                driver_data = USER_CACHE.get(d_id) or USER_CACHE.get(str(d_id)) or {}
+                driver_name = driver_data.get('name', 'كابتن متوفر')
+                drivers_list_text += f"{i} - 🚕 **{driver_name}**\n"
 
-            await processing_msg.edit_text(
-                f"✅ تم إرسال طلبك إلى **{len(sent_info)}** كابتن.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+            final_text = (
+                f"✅ **تم تعميم طلبك بنجاح!**\n\n"
+                f"وصل طلبك إلى {len(sent_info)} كابتن متواجدين حالياً:\n"
+                f"{drivers_list_text}\n"
+                f"⏳ يرجى الانتظار، سيتم التواصل معك هنا فور قبول أحدهم."
             )
-            
-            # الإصلاح هنا: إضافة المتغير الرابع (ID الرسالة)
-            asyncio.create_task(
-                start_order_timer(
-                    context, 
-                    sent_info, 
-                    user_id, 
-                    processing_msg.message_id # تمرير ID الرسالة للعداد
+
+            try:
+                # تعديل الرسالة وحذف أي أزرار (None)
+                await context.bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=processing_msg.message_id,
+                    text=final_text,
+                    reply_markup=None, # إزالة الأزرار تماماً
+                    parse_mode="Markdown"
                 )
-            )
+            except:
+                await context.bot.send_message(chat_id=user_id, text=final_text, parse_mode="Markdown")
+            
+            # تشغيل العداد لإلغاء الطلب إذا لم يستجب أحد
+            asyncio.create_task(start_order_timer(context, sent_info, user_id, processing_msg.message_id))
         else:
-            await processing_msg.edit_text(
-                "⚠️ لم يتم العثور على كباتن حالياً في نطاقك.",
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="⚠️ نعتذر، لا يوجد كباتن متاحين حالياً في موقعك.",
                 reply_markup=get_main_kb("rider", True)
             )
+            try: await processing_msg.delete()
+            except: pass
         
-        context.user_data['state'] = None 
-
-    # --- الخطوة 5: تحديث الموقع العادي ---
-    
-
+        context.user_data['state'] = None
 
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
