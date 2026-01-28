@@ -401,8 +401,8 @@ def get_main_kb(role, is_verified=True):
         if not is_verified:
             return ReplyKeyboardMarkup([[KeyboardButton("⏳ الحساب قيد المراجعة")]], resize_keyboard=True)
         return ReplyKeyboardMarkup([
-            [KeyboardButton("📍 تحديث موقعي"), KeyboardButton("📝 تحديث الأحياء")],
-            [KeyboardButton("💰 محفظتي"), KeyboardButton("ℹ️ حالة اشتراكي")],
+            [KeyboardButton("📍 تحديث موقعي")],
+            [KeyboardButton("ℹ️ حالة اشتراكي")],
             [KeyboardButton("📞 تواصل مع الإدارة")] # تم إضافة الزر هنا
         ], resize_keyboard=True)
 
@@ -1597,15 +1597,16 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
         except:
             pass
 
-        await context.bot.send_message(
+         await context.bot.send_message(
             chat_id=rider_id, 
             text=(
-                "⚠️ **انتهى وقت البحث**\n\n"
-                "لم يتم قبول طلبك خلال 5 دقائق. يمكنك إعادة محاولة الطلب مرة أخرى إذا كنت لا تزال ترغب في ذلك."
+                "✨ **شكراً لثقتكم بنا ممتنون لاختياركم خدمتنا.**\n\n"
+                "يمكنك الآن إرسال طلب جديد وسنقوم بخدمتك بشكل أفضل. نحن دائماً بانتظارك! 🌹"
             ),
             reply_markup=get_main_kb(user_role, is_verified),
             parse_mode="Markdown"
         )
+
         
         # ج) تنظيف الحالة
         if rider_id in context.application.user_data:
