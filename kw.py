@@ -403,25 +403,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "عزيزي"
     
-    # 1. تنظيف الذاكرة
+    # 1. تنظيف الذاكرة وتحديث الكاش
     context.user_data.clear()
-
-    # 2. تحديث الكاش من قاعدة البيانات
     await sync_all_users()
 
-    # 3. محاولة جلب المستخدم (فحص كونه رقماً أو نصاً)
+    # 2. جلب بيانات المستخدم من الكاش
     user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
     
-    # فحص إضافي: هل الجوال مسجل وقيمته ليست الافتراضية؟
     has_phone = False
     if user:
         phone = str(user.get('phone', ''))
         if phone and phone not in ['0000000000', 'None', '']:
             has_phone = True
 
-    # --- الآن نبدأ الشروط بناءً على النتيجة ---
-    
-    # إذا كان مسجلاً وبدون روابط عميقة، أرسل المنيو فوراً
+    # 3. معالجة الدخول بدون روابط عميقة (Start عادي)
     if not context.args and has_phone:
         await update.message.reply_text(
             f"👋 مرحباً بك مجدداً يا {user['name']}", 
@@ -429,40 +424,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # (هنا يكمل الكود بقية حالات الروابط العميقة context.args كما هي لديك)
-
-    # 3. معالجة الروابط العميقة (Deep Linking)
+    # 4. معالجة الروابط العميقة (Deep Linking)
     if context.args:
         arg_value = context.args[0]
 
-        # --- الحالة الأهم: طلب رحلة (سواء عامة أو لكابتن محدد) ---
+        # --- حالة طلب رحلة (order_) ---
         if arg_value.startswith("order_"):
-            # استخراج المعرف (سواء كان رقم ID أو كلمة general)
-            # مثال: order_12345  -> target_id = "12345"
-            # مثال: order_general -> target_id = "general"
             target_id = arg_value.replace("order_", "")
 
-            # أ) المستخدم غير مسجل (أو ليس لديه رقم) -> اطلب الرقم واحفظ الطلب معلقاً
+            # أ) المستخدم غير مسجل
             if not has_phone:
                 context.user_data['state'] = 'WAIT_RIDER_PHONE'
                 context.user_data['temp_name'] = first_name
-                # نحفظ وجهة الطلب لنعود إليها تلقائياً بعد أن يكتب الرقم في (handle_message)
                 context.user_data['pending_order_driver'] = target_id 
                 
                 await update.message.reply_text(
                     f"👋 أهلاً بك يا {first_name}!\n\n"
                     "لإتمام طلبك، نحتاج لتوثيق حسابك.\n"
                     "✏️ **يرجى كتابة رقم جوالك الآن** (مثال: 05xxxxxxx):",
-                    reply_markup=ReplyKeyboardRemove(), # إخفاء أي أزرار قديمة
+                    reply_markup=ReplyKeyboardRemove(),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
 
-            # ب) المستخدم مسجل وجاهز -> اطلب تفاصيل الرحلة فوراً
+            # ب) المستخدم مسجل -> تحديد نص الرسالة بناءً على نوع الطلب
+            # ✅ تم توحيد اسم المتغير هنا إلى msg_text (حروف صغيرة) لمنع الـ Crash
             if target_id == "general":
                 context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
-                Msg_text = "🌍 **إلى أين وجهتك؟**"
-
+                msg_text = "🌍 **إلى أين وجهتك؟**"
             else:
                 context.user_data['driver_to_order'] = target_id
                 context.user_data['state'] = 'WAIT_TRIP_DETAILS'
@@ -475,23 +464,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # --- بقية الحالات (تسجيل الكباتن، البحث بالأحياء، إلخ) ---
-        
-        elif arg_value == "driver_reg":
+        # --- حالات التسجيل ---
+        elif arg_value in ["driver_reg", "reg_driver"]:
             context.user_data['state'] = 'WAIT_NAME'
             context.user_data['reg_role'] = 'driver'
             await update.message.reply_text(
                 "🚖 **أهلاً بك يا كابتن**\nيرجى كتابة اسمك الثلاثي للبدء في التسجيل:",
-                reply_markup=ReplyKeyboardRemove(),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
-        elif arg_value == "reg_driver":
-            context.user_data['reg_role'] = 'driver'
-            context.user_data['state'] = 'WAIT_NAME'
-            await update.message.reply_text(
-                "🚗 **تسجيل كابتن جديد**\nيرجى كتابة اسمك الثلاثي:",
                 reply_markup=ReplyKeyboardRemove(),
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -507,18 +485,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # (يمكنك إضافة كود sd_ هنا إذا كنت لا تزال تستخدمه)
-
-    # 4. المسار الطبيعي (بدون روابط أو دخول عبر Start عادي)
-    if has_phone:
-        # مسجل -> اعرض القائمة الرئيسية واخرج فوراً من الدالة
-        await update.message.reply_text(
-            f"👋 مرحباً بك مجدداً {user['name']}", 
-            reply_markup=get_main_kb(user['role'], user['is_verified'])
-        )
-        return  # <--- هذا هو التعديل الهام جداً لمنع البوت من طلب التسجيل مجدداً
-
-    # إذا لم يكن مسجلاً (ولم يكن لديه رابط عميق) -> اطلب التسجيل
+    # 5. إذا وصل الكود هنا ولم ينفذ أي Return (مستخدم جديد بدون رابط)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
          InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
@@ -527,7 +494,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"مرحباً بك {first_name}، أنت غير مسجل لدينا.\nاختر نوع الحساب للبدء:", 
         reply_markup=kb
     )
-
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
 
@@ -2672,40 +2638,19 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه", "أعذار طبية"
     ]
     
-    # 2. كلمات تدل على تعاقدات (شهرية / سيكليفات) - لتحويلها للأدمن
+    # 2. كلمات تدل على تعاقدات (شهرية)
     MONTHLY_KEYWORDS = [
         "شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات", "التزام شهري"
     ]
 
     # 3. كلمات الطلبات العادية
-        # 2. قائمة الطلبات الموسعة (مشاوير عامة وعامية)
     REQUEST_KEYWORDS = [
-        # أفعال الطلب المباشرة
         "توصيل", "توصيله", "توصيلة", "مشوار", "مشاوير", "روحه", "جيه", "جية", "روحة",
         "وديني", "وصلني", "ابغاك توديني", "ياخذني", "يوديني", "محتاج سيارة", 
         "مطلوب سيارة", "مطلوب سواق", "مطلوب كابتن", "ابي سيارة", "ابي سواق",
-        
-        # كلمات عامية مرادفة
-        "تكسي", "تاكسي", "كداد", "كدادة", "سيارة مشوار", "موجود حاليا", 
-        "متوفر الان", "بسرعه", "مستعجل", "طريق", "خط", "طلعة", "طلعه",
-        
-        # كلمات تدل على النقل (أغراض ومقاضي)
+        "تكسي", "تاكسي", "كداد", "كدادة", "سيارة مشوار", "بسرعه", "مستعجل",
         "نقل", "تنقل", "طرد", "شحنة", "كرتون", "مقاضي", "اغراض", "توصيل طلبات"
     ]
-
-    # --- فحص إضافي ذكي (خارج القائمة المباشرة) ---
-    has_request = any(k in msg_clean for k in REQUEST_KEYWORDS)
-    
-    # إذا لم يجد كلمة من القائمة، يفحص نمط "من ... الى" (مثال: من حي الشفاء الى العليا)
-    if not has_request:
-        if "من" in msg_clean and ("الى" in msg_clean or "إلى" in msg_clean):
-            has_request = True
-            
-    # فحص كلمات "الاستفهام" عن التوفر
-    if not has_request:
-        question_keywords = ["في احد يوصل", "ممكن توصيل", "مين يوديني", "سواقين موجودين"]
-        if any(q in msg_clean for q in question_keywords):
-            has_request = True
 
     # --- أولاً: حماية من السبام ---
     if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
@@ -2713,47 +2658,29 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         except: pass
         return
 
-    # --- ثانياً: فحص الطلبات الشهرية (تحويل للادمن لضمان العمولة) ---
-        # --- ثانياً: فحص الطلبات الشهرية (تحويل للادمنز لضمان العمولة) ---
+    # --- ثانياً: فحص الطلبات الشهرية (إرسال للآدمنز) ---
     if any(k in msg_clean for k in MONTHLY_KEYWORDS):
-        # نص الإشعار الموحد
         admin_text = (
             "🚨 **طلب تعاقد شهري جديد:**\n\n"
             f"👤 العميل: {user.first_name}\n"
             f"📝 النص: {text}\n"
             f"🔗 [تواصل مع العميل](tg://user?id={user.id})"
         )
-        
-        # إرسال الإشعار لكل آدمن موجود في قائمة ADMIN_IDS
         for admin_id in ADMIN_IDS:
             try:
-                await context.bot.send_message(
-                    chat_id=admin_id, 
-                    text=admin_text, 
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                print(f"لم يتمكن البوت من إرسال إشعار للآدمن {admin_id}: {e}")
-        
+                await context.bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="Markdown")
+            except: pass
+        return # ننهي هنا إذا كان الطلب شهرياً
 
-        # ملاحظة: لا نرد في القروب هنا، أو نكتفي بحذفها أو تركها حسب رغبتك
-
-    # --- ثالثاً: فحص المشاوير العادية مع نظام الـ 30 دقيقة ---
+    # --- ثالثاً: فحص المشاوير العادية (الرد الفوري) ---
     has_request = any(k in msg_clean for k in REQUEST_KEYWORDS)
+    
+    # فحص الأنماط الذكية (من...إلى) أو الاستفهامية
+    
     is_admin_run = (msg_clean == "رن" and user.id in ADMIN_IDS)
 
+    # الرد فوراً إذا وجد طلب أو إذا كان الآدمن أرسل "رن"
     if has_request or is_admin_run:
-        current_time = time.time()
-        last_time = LAST_REPLY_TIME.get(chat_id, 0)
-
-        # التحقق هل مرت 30 دقيقة (1800 ثانية)؟
-        # استثنينا "رن" الأدمن من وقت الانتظار لكي تعمل فوراً
-        if current_time - last_time < 1800 and not is_admin_run:
-            return  # لم تمر 30 دقيقة، تجاهل الرد التلقائي الآن
-
-        # تحديث وقت آخر رد
-        LAST_REPLY_TIME[chat_id] = current_time
-
         welcome_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📍 اطلب أقرب سائق (عبر GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
             [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
@@ -2767,12 +2694,10 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="Markdown"
         )
         
+        # إذا كان الآدمن أرسل "رن"، نحذف رسالته للحفاظ على نظافة القروب
         if is_admin_run:
             try: await update.message.delete()
             except: pass
-
-
-
 async def handle_chat_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. حماية: نتجاهل أي تحديث ليس رسالة (تجاهل ضغطات الأزرار CallbackQueries)
     if not update.message: 
@@ -3116,13 +3041,6 @@ async def admin_show_user_details(update, context, target_id):
 
 
 # ==================== 🌐 5. خادم Flask (للبقاء نشطاً) ====================
-
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is Running!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
 
 # ==================== 🏁 6. التشغيل الرئيسي ====================
 def main():
