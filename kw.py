@@ -2826,6 +2826,72 @@ async def handle_chat_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 6. إيقاف المعالجة لضمان عدم وصول الرسالة لمعالج الأدمن
     raise ApplicationHandlerStop
 
+async def broadcast_to_riders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 1. التحقق من أن المرسل هو الأدمن
+    if user_id not in ADMIN_IDS:
+        return
+
+    # 2. تحديد مصدر الرسالة (سواء كانت نصاً مكتوباً مع الأمر أو رداً على صورة/ملف)
+    target_msg = None
+    if update.message.reply_to_message:
+        target_msg = update.message.reply_to_message
+    elif context.args:
+        broadcast_text = " ".join(context.args)
+    else:
+        await update.message.reply_text(
+            "💡 **طريقة الاستخدام:**\n"
+            "• لإرسال نص: اكتب `/send_riders` متبوعاً بنص الرسالة.\n"
+            "• لإرسال صورة/فيديو: قم بالرد (Reply) على الصورة واكتب `/send_riders`.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # 3. جلب قائمة الركاب فقط من الكاش
+    # نفترض أن role == 'rider'
+    riders = [u_id for u_id, data in USER_CACHE.items() if data.get('role') == 'rider']
+    
+    if not riders:
+        await update.message.reply_text("❌ لم يتم العثور على ركاب مسجلين في القاعدة.")
+        return
+
+    await update.message.reply_text(f"⏳ جاري الإرسال إلى {len(riders)} راكب... يرجى الانتظار.")
+
+    success = 0
+    fail = 0
+
+    for r_id in riders:
+        try:
+            if target_msg:
+                # إذا كان رداً على رسالة (صورة، ملف، فيديو، نص)
+                await context.bot.copy_message(
+                    chat_id=r_id,
+                    from_chat_id=update.message.chat_id,
+                    message_id=target_msg.message_id
+                )
+            else:
+                # إذا كان نصاً عادياً
+                await context.bot.send_message(
+                    chat_id=r_id,
+                    text=f"📢 **إعلان للمشتركين:**\n\n{broadcast_text}",
+                    parse_mode="Markdown"
+                )
+            
+            success += 1
+            # تأخير بسيط (0.05 ثانية) لتجنب الـ Flood
+            await asyncio.sleep(0.05)
+        except Exception:
+            fail += 1
+
+    await update.message.reply_text(
+        f"✅ **اكتمل الإرسال للركاب!**\n\n"
+        f"🟢 تم بنجاح: {success}\n"
+        f"🔴 فشل (بوت محظور): {fail}"
+    )
+
+
+
 async def admin_send_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال رسالة من الأدمن لمستخدم: /send ID الرسالة"""
     if update.effective_user.id not in ADMIN_IDS: return
@@ -3195,6 +3261,8 @@ def main():
 # أو ككلمة نصية
     application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
+    application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
+
 
     
     # 1. كأمر مباشر /make_delivery
