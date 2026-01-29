@@ -1558,61 +1558,49 @@ async def admin_panel_view(update, context):
         await update.message.reply_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: list, rider_id: int, status_msg_id: int):
-    """انتظار 5 دقائق مع تحديث الوقت، وحذف رسالة البحث فور القبول أو الانتهاء"""
     try:
-        # 1. جلب بيانات المستخدم
+        # جلب البيانات الأولية
         await sync_all_users()
         user_data = USER_CACHE.get(rider_id) or USER_CACHE.get(str(rider_id)) or {}
         user_role = user_data.get('role', 'rider')
         is_verified = user_data.get('is_verified', False)
 
-        # 2. العداد التنازلي
-        for minutes_left in range(5, 0, -1):
-            # التحقق: هل تم قبول الطلب؟
-            user_context_data = context.application.user_data.get(rider_id, {})
-            if user_context_data.get('order_status') == 'ACCEPTED':
-                # --- التعديل الجوهري هنا ---
-                try:
-                    await context.bot.delete_message(chat_id=rider_id, message_id=status_msg_id)
-                except:
-                    pass # الرسالة قد تكون حذفت بالفعل
-                return # الخروج فوراً وتوقف المؤقت
-
-            # تحديث وقت الانتظار في الرسالة
+        for minutes_left in range(30, 0, -1):
+            # تحديث نص الرسالة في بداية كل دقيقة
             try:
                 await context.bot.edit_message_text(
                     chat_id=rider_id,
                     message_id=status_msg_id,
-                    text=f"📡 جاري البحث عن كباتن...\n⏳ الوقت المتبقي لصلاحية الطلب: {minutes_left} دقائق",
+                    text=f"📡 جاري البحث عن كباتن...\n⏳ الوقت المتبقي لصلاحية الطلب: {minutes_left} دقيقة",
                     parse_mode="Markdown"
                 )
-            except:
-                pass 
-            
-            await asyncio.sleep(60)
+            except Exception: pass
 
-        # 3. عند انتهاء الوقت بدون قبول
-        
-        # أ) حذف الطلب من عند الكباتن
+            # --- التحقق الذكي كل ثانية بدلاً من كل دقيقة ---
+            for _ in range(60): 
+                user_context_data = context.application.user_data.get(rider_id, {})
+                if user_context_data.get('order_status') == 'ACCEPTED':
+                    try:
+                        await context.bot.delete_message(chat_id=rider_id, message_id=status_msg_id)
+                    except: pass
+                    return # الخروج فوراً عند القبول
+
+                await asyncio.sleep(1) # انتظر ثانية واحدة فقط ثم تحقق مجدداً
+            # ---------------------------------------------
+
+        # منطق انتهاء الوقت (إذا لم يتم القبول)
         for info in messages_info:
             try:
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
-            except:
-                pass 
-            
-        # ب) إرسال رسالة الشكر والامتنان المختصرة
+            except: pass
+
         await context.bot.send_message(
             chat_id=rider_id, 
-            text=(
-                "✨ **شكراً لثقتكم بنا، ممتنون لاختياركم خدمتنا.**\n\n"
-                "يمكنك الآن تحديث موقعك وإرسال طلب جديد لنقوم بخدمتك بشكل أفضل. نحن دائماً بانتظارك! 🌹"
-            ),
+            text="✨ **شكراً لثقتكم بنا، ممتنون لاختياركم خدمتنا.**\n\nيمكنك الآن تحديث موقعك وإرسال طلب جديد لنقوم بخدمتك بشكل أفضل. نحن دائماً بانتظارك! 🌹",
             reply_markup=get_main_kb(user_role, is_verified),
             parse_mode="Markdown"
         )
 
-        
-        # ج) تنظيف الحالة
         if rider_id in context.application.user_data:
             context.application.user_data[rider_id]['order_status'] = None
 
@@ -2743,7 +2731,7 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 4. كلمات نية الطلب
     INTENT_KEYWORDS = [
-        "توصيل", "مشوار", "سواق", "كابتن", "وصلني", "بكم", "ابغاك", "ابيك"
+        "توصيل", "مشوار", "سواق", "كابتن", "سياره", "سيارة", "توصيل", "وصلني", "بكم", "ابغاك", "ابيك"
     ]
 
     # --- أولاً: حماية من السبام ---
