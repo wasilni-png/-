@@ -2875,6 +2875,56 @@ async def contact_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
+async def broadcast_to_drivers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 1. التحقق من صلاحية الأدمن
+    if user_id not in ADMIN_IDS:
+        return
+
+    # 2. التأكد من وجود نص للرسالة
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ **خطأ:** يرجى كتابة الرسالة بعد الأمر.\n"
+            "مثال: `/send_drivers السلام عليكم يا كباتن، يرجى تحديث اللوحات`",
+            parse_mode="Markdown"
+        )
+        return
+
+    broadcast_msg = " ".join(context.args)
+    
+    # 3. جلب السائقين فقط من الكاش أو قاعدة البيانات
+    # نفترض أن USER_CACHE يحتوي على بيانات المستخدمين مع 'role'
+    drivers = [u_id for u_id, data in USER_CACHE.items() if data.get('role') == 'driver']
+    
+    if not drivers:
+        await update.message.reply_text("❌ لم يتم العثور على سائقين مسجلين في القاعدة.")
+        return
+
+    await update.message.reply_text(f"⏳ جاري إرسال الرسالة إلى {len(drivers)} كابتن... يرجى الانتظار.")
+
+    success = 0
+    fail = 0
+
+    for d_id in drivers:
+        try:
+            # إرسال الرسالة بتنسيق رسمي
+            await context.bot.send_message(
+                chat_id=d_id,
+                text=f"📢 **إشعار إداري للكباتن فقط:**\n\n{broadcast_msg}",
+                parse_mode="Markdown"
+            )
+            success += 1
+            # تأخير بسيط جداً لتجنب حظر تليجرام عند الإرسال الجماعي
+            await asyncio.sleep(0.05) 
+        except Exception:
+            fail += 1
+
+    await update.message.reply_text(
+        f"✅ **اكتملت عملية الإرسال!**\n\n"
+        f"🟢 تم بنجاح: {success}\n"
+        f"🔴 فشل (بوت محظور): {fail}"
+    )
 
 async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. التحقق من صلاحية الأدمن
@@ -3156,6 +3206,7 @@ def main():
     application.add_handler(CommandHandler("admin", admin_panel_view), group=0)
 # أو ككلمة نصية
     application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
+    application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
 
     
     # 1. كأمر مباشر /make_delivery
