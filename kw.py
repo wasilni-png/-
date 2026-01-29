@@ -2706,47 +2706,45 @@ async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE
 # دالة مساعدة لتنظيف النص (توضع خارج الدالة الرئيسية)
 
 
-# الدالة الرئيسية لمسح الرسائل في القروب
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
     user = update.effective_user
-    chat_id = update.effective_chat.id
     text = update.message.text
-    msg_clean = normalize_text(text)
+    
+    # دالة داخلية للتنظيف لضمان مطابقة الحروف (ة -> ه، أ -> ا)
+    def clean_text(t):
+        return t.lower().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").strip()
+
+    msg_clean = clean_text(text)
 
     # 1. قائمة السبام (تحذف فوراً)
     REAL_SPAM_KEYWORDS = [
         "استثمار", "ربح سريع", "تداول", "عملات رقمية", "شغل من البيت",
-        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه", "أعذار طبية"
+        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه"
     ]
     
-    # 2. كلمات تدل على تعاقدات (شهرية)
-    MONTHLY_KEYWORDS = [
-        "شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات", "التزام شهري"
+    # 2. كلمات الطلبات الشهرية
+    MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
+
+    # 3. أحياء ومعالم المدينة المنورة فقط
+    MEDINA_KEYWORDS = [
+        "الاسكان", "البحر", "البدراني", "الفتح", "التلال", "الجرف", "الحزام", "الحمراء", 
+        "الخالديه", "الدويخله", "الرانونا", "الربوه", "الشروق", "الشرق", 
+        "العاقول", "العريض", "العزيزيه", "العنابس", "القبلتين", "المبعوث", 
+        "المطار", "المغيسله", "الملك فهد", "النبلاء", "الهجره", "باقدو", 
+        "بني حارثه", "حديقه الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور",
+        "شظاه", "مستشفي الملك فهد", "مستشفي الملك سلمان", "مستشفي الولاده", 
+        "مستشفي المواساه", "النور مول", "العاليه مول", "القارات", 
+        "العيون", "طريق الملك عبدالعزيز", "الدائري", "الامام مسلم", 
+        "الامام البخاري", "الدعيثه", "سلطانه"
     ]
 
-    # 3. كلمات الطلبات العادية
-    REQUEST_KEYWORDS = [
-    # --- كلمات النية والطلب ---
-    "توصيل", "توصيله", "مشوار", "مشاوير", "روحه", "جيه", "طلعه", "رحله", "رايح",
-    "وديني", "وصلني", "ابغاك", "ابيك", "سواق", "كابتن", "تاكسي", 
-    "نقل", "اغراض", "لوكيشن", "الموقع", "بكم", "عربيه", "عربية",
-
-    # --- أحياء ومعالم المدينة المنورة ---
-    "الاسكان", "البحر", "البدراني", "الفتح", "التلال", "الجرف", "الحزام", "الحمراء", 
-    "الخالديه", "الدويخله", "الرانونا", "الربوه", "الشروق", "الشرق", 
-    "العاقول", "العريض", "العزيزيه", "العنابس", "القبلتين", "المبعوث", 
-    "المطار", "المغيسله", "الملك فهد", "النبلاء", "الهجره", "باقدو", 
-    "بني حارثه", "حديقه الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور",
-    "شظاه", "مستشفي الملك فهد", "مستشفي الملك سلمان", "مستشفي الولاده", 
-    "مستشفي المواساه", "النور مول", "العاليه مول", "القارات", 
-    "العيون", "طريق الملك عبدالعزيز", "الدائري",
-    
-    # --- الإضافات الجديدة ---
-    "الامام مسلم", "الامام البخاري", "الدعيثه", "سلطانه"
-]
+    # 4. كلمات نية الطلب
+    INTENT_KEYWORDS = [
+        "توصيل", "مشوار", "سواق", "كابتن", "وصلني", "بكم", "ابغاك", "ابيك"
+    ]
 
     # --- أولاً: حماية من السبام ---
     if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
@@ -2754,46 +2752,45 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         except: pass
         return
 
-    # --- ثانياً: فحص الطلبات الشهرية (إرسال للآدمنز) ---
+    # --- ثانياً: فحص الطلبات الشهرية ---
     if any(k in msg_clean for k in MONTHLY_KEYWORDS):
         admin_text = (
-            "🚨 **طلب تعاقد شهري جديد:**\n\n"
+            "🚨 **طلب تعاقد شهري (المدينة المنورة):**\n\n"
             f"👤 العميل: {user.first_name}\n"
             f"📝 النص: {text}\n"
             f"🔗 [تواصل مع العميل](tg://user?id={user.id})"
         )
         for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="Markdown")
+            try: await context.bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="Markdown")
             except: pass
-        return # ننهي هنا إذا كان الطلب شهرياً
+        return
 
-    # --- ثالثاً: فحص المشاوير العادية (الرد الفوري) ---
-    has_request = any(k in msg_clean for k in REQUEST_KEYWORDS)
-    
-    # فحص الأنماط الذكية (من...إلى) أو الاستفهامية
+    # --- ثالثاً: الفحص الذكي للأحياء والنية ---
+    # نتحقق إذا ذكر المستخدم حي من أحياء المدينة OR كلمة تدل على طلب مشوار
+    found_medina_area = any(clean_text(k) in msg_clean for k in MEDINA_KEYWORDS)
+    found_intent = any(clean_text(k) in msg_clean for k in INTENT_KEYWORDS)
     
     is_admin_run = (msg_clean == "رن" and user.id in ADMIN_IDS)
 
-    # الرد فوراً إذا وجد طلب أو إذا كان الآدمن أرسل "رن"
-    if has_request or is_admin_run:
+    # الرد إذا وجد (حي من المدينة) أو (كلمة مشوار) أو (أمر الآدمن)
+    if found_medina_area or found_intent or is_admin_run:
         welcome_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📍 اطلب أقرب سائق (عبر GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
+            [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
             [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
         ])
         
         await update.message.reply_text(
-            f"🌴 **حياك الله في خدمة التوصيل الذكي** 🌴\n\n"
-            f"يا {user.first_name}، لخدمتك بشكل أسرع:\n"
-            f"✅ **اضغط على زر (طلب عبر GPS) بالأسفل**", 
+            f"✨ **أبشر يا {user.first_name}، طلبك في المدينة المنورة مجاب!** ✨\n\n"
+            "للحصول على كابتن بسرعة وبدقة:\n"
+            "✅ **اضغط على زر (طلب عبر GPS) بالأسفل** وسيتواصل معك الكباتن فوراً.", 
             reply_markup=welcome_kb,
             parse_mode="Markdown"
         )
         
-        # إذا كان الآدمن أرسل "رن"، نحذف رسالته للحفاظ على نظافة القروب
         if is_admin_run:
             try: await update.message.delete()
             except: pass
+
 async def handle_chat_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. حماية: نتجاهل أي تحديث ليس رسالة (تجاهل ضغطات الأزرار CallbackQueries)
     if not update.message: 
