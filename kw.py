@@ -58,7 +58,7 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
+BOT_TOKEN = "8284667095:AAEVzyE8cutBHYT8y-IF-OHZoRT9IN7LXqw"
 ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
@@ -2845,11 +2845,12 @@ async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
-# دالة الرسالة التلقائية (كل 30 دقيقة)
+# ==============================================================================
+# 1. دالة الإرسال التلقائي (تعمل كل 30 دقيقة)
+# ==============================================================================
 async def send_periodic_advertisement(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     
-    # محتوى الرسالة والأزرار
     welcome_kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
         [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
@@ -2869,11 +2870,11 @@ async def send_periodic_advertisement(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        print(f"فشل الإرسال التلقائي للمجموعة {job.chat_id}: {e}")
+        print(f"⚠️ فشل الإرسال التلقائي للمجموعة {job.chat_id}: {e}")
 
-# دالة مساعدة لتنظيف النص (توضع خارج الدالة الرئيسية)
-
-
+# ==============================================================================
+# 2. الدالة الرئيسية: مراقب الجروب الذكي (Scanner)
+# ==============================================================================
 async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -2882,53 +2883,41 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     text = update.message.text
     
-    # دالة التنظيف
+    # دالة تنظيف النص (توحيد الأحرف العربية)
     def clean_text(t):
         return t.lower().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").strip()
 
     msg_clean = clean_text(text)
 
-    # ========================== المؤقت (30 دقيقة) ==========================
+    # ------------------------------------------------------------------
+    # 🕒 تشغيل المؤقت التلقائي عند أول رسالة (كل 30 دقيقة = 1800 ثانية)
+    # ------------------------------------------------------------------
     if context.job_queue:
         current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
         if not current_jobs:
             context.job_queue.run_repeating(
-                send_periodic_advertisement, interval=1800, first=10, chat_id=chat_id, name=str(chat_id)
+                send_periodic_advertisement, 
+                interval=1800, 
+                first=10, 
+                chat_id=chat_id, 
+                name=str(chat_id)
             )
-    # ======================================================================
+            print(f"✅ تم تفعيل الإرسال الدوري للمجموعة: {chat_id}")
 
-    # 1. كلمات الحظر (SPAM)
+    # ------------------------------------------------------------------
+    # 🗂️ قواعد البيانات والقوائم
+    # ------------------------------------------------------------------
+    
+    # 1. قائمة السبام الخطيرة (حذف فوري)
     REAL_SPAM_KEYWORDS = [
         "استثمار", "ربح سريع", "تداول", "عملات رقمية", "شغل من البيت",
-        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي"
+        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه"
     ]
-    if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
-        try: await update.message.delete()
-        except: pass
-        return
 
-    # 2. كلمات العقود الشهرية
+    # 2. قائمة العقود الشهرية (إشعار فقط)
     MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
-    if any(k in msg_clean for k in MONTHLY_KEYWORDS):
-        # ... (كود إشعار الأدمن كما هو) ...
-        return
 
-    # ========================== منطق الفهم الذكي (AI Logic) ==========================
-    
-    # القائمة أ: كلمات تدل على (الاحتياج/الطلب)
-    NEED_WORDS = [
-        "ابي", "ابغى", "احتاج", "بغيت", "مطلوب", "لوسمحت", "فيه", "عندكم", "ابيك", "ابغاك", 
-        "وفر", "احصل", "مين", "من", "رايح", "يودي", "يوصل"
-    ]
-
-    # القائمة ب: كلمات تدل على (نوع الخدمة)
-    SERVICE_WORDS = [
-        "تكسي", "تاكسي", "مشوار", "نقل", "سواق", "سيارة", "سياره", 
-        "ليموزين", "الرد", "خط"
-    ]
-
-    # القائمة ج: أحياء المدينة المنورة (المواقع)
-        # 3. قاعدة بيانات أحياء ومعالم المدينة المنورة (المواقع)
+    # 3. أحياء ومعالم المدينة المنورة (المواقع)
     MEDINA_LOCATIONS = [
         "الحرم", "المسجد النبوي", "البقيع", "قباء", "القبلتين", "المساجد السبعة", 
         "سيد الشهداء", "جبل أحد", "جبل الرماة", "الخندق", "بئر عثمان", "بئر إياس", 
@@ -2952,33 +2941,93 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         "قطار الحرمين", "جامعة طيبة", "الجامعة الإسلامية"
     ]
 
+    # 4. قوائم الاستبعاد (لعدم الرد على البيع والشراء والنقاشات)
+    EXCLUDE_KEYWORDS = [
+        "بيع", "شراء", "حراج", "سوم", "مسيوم", "للبيع", "اشتري", "اشري", "شاري",
+        "استبدال", "بدل", "قطع", "معدات", "مطلوب شراء", "معروض", "للتقبيل", "للتنازل",
+        "نظيف", "ممشى", "موديل", "مكينة", "قير", "فحص", "استمارة", "مصدوم", "تشليح",
+        "كم سيم", "كم وصل", "حدي", "مالي حد", "على السوم", "جديد", "مستعمل", "مخزن"
+    ]
+    
+    NON_TAXI_KEYWORDS = [
+        "عفش", "دينا", "سطحه", "سطحة", "ايجار", "إيجار", "ورشة", "ورشه", "ميكانيكي",
+        "اقساط", "أقساط", "غسيل", "تنظيف", "نقل بضائع", "تحميل", "تنزيل", "عمال", "شحن",
+        "سباك", "كهربائي", "ترميم", "تأجير", "تريلة", "وايت", "بوز", "قلاب", "بوبكات"
+    ]
+    
+    GENERAL_QUESTIONS = [
+        "افضل", "أفضل", "ارخص", "أرخص", "ايش احسن", "وش احسن", "تعرفون", "يا شباب",
+        "بكم المشوار", "بكم التوصيل", "سؤال", "استفسار", "احد جرب", "رايكم", "رأيكم",
+        "وظيفة", "وظائف", "أدور شغل", "مندوب", "تسويق", "إعلان", "اعلان", "قروب",
+        "تحذير", "نصاب", "مفقودات", "ضيعت", "لقيت", "زحمة", "طريق", "تفتيش", "ساهر"
+    ]
 
-    # --- الفحص ---
-    has_need = any(w in msg_clean for w in NEED_WORDS)       # هل قال "أبي"؟
-    has_service = any(w in msg_clean for w in SERVICE_WORDS) # هل قال "تكسي"؟
-    has_location = any(w in msg_clean for w in MEDINA_LOCATIONS) # هل ذكر "حي"؟
+    # 5. كلمات الخدمة والربط
+    SERVICE_WORDS = ["مشوار", "توصيل", "تكسي", "تاكسي", "وصلني", "ودني", "سواق", "كابتن", "سيارة", "سياره"]
+    CONNECTORS = ["من", "الي", "الى", "لـ", "لحي", "عند"]
 
-    # --- الشروط الصارمة للرد (Smart Reply Rules) ---
+    # ------------------------------------------------------------------
+    # 🚀 بدء عمليات الفحص والمنطق
+    # ------------------------------------------------------------------
+
+    # 1. حذف السبام فوراً
+    if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
+        try: await update.message.delete()
+        except: pass
+        return
+
+    # 2. إشعار الآدمن بالطلبات الشهرية
+    if any(k in msg_clean for k in MONTHLY_KEYWORDS):
+        admin_text = (
+            "🚨 **طلب تعاقد شهري (المدينة المنورة):**\n\n"
+            f"👤 العميل: {user.first_name}\n"
+            f"📝 النص: {text}\n"
+            f"🔗 [تواصل مع العميل](tg://user?id={user.id})"
+        )
+        for admin_id in ADMIN_IDS:
+            try: await context.bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="Markdown")
+            except: pass
+        return
+
+    # 3. دمج قوائم الاستبعاد والفحص
+    ALL_EXCLUDES = EXCLUDE_KEYWORDS + NON_TAXI_KEYWORDS + GENERAL_QUESTIONS
+    if any(w in msg_clean for w in ALL_EXCLUDES):
+        return  # توقف هنا، الرسالة ليست طلب مشوار
+
+    # 4. تحليل نمط الرسالة (Pattern Recognition)
+    
+    # البحث عن الأحياء المذكورة
+    found_locations = [loc for loc in MEDINA_LOCATIONS if clean_text(loc) in msg_clean]
+    
+    # البحث عن كلمات الخدمة والربط
+    has_service = any(w in msg_clean for w in SERVICE_WORDS)
+    has_connector = any(w in msg_clean for w in CONNECTORS)
+    
+    # فحص طول الرسالة (استبعاد القصص الطويلة)
+    is_short_msg = len(msg_clean.split()) < 15
+
+    # --- منطق الرد النهائي ---
     should_reply = False
 
-    # الحالة 1: طلب صريح للخدمة (مثال: "أبي تكسي"، "مطلوب مشوار")
-    if has_need and has_service:
-        should_reply = True
-    
-    # الحالة 2: خدمة + موقع (مثال: "تكسي للحرم"، "مشوار لسلطانة")
-    elif has_service and has_location:
+    # النمط الذهبي 1: ذكر حيين مختلفين (مثال: من العزيزية للحرم)
+    if len(found_locations) >= 2:
         should_reply = True
 
-    # الحالة 3: طلب + موقع (مثال: "أبي الحرم"، "مين يوصلني المطار")
-    elif has_need and has_location:
+    # النمط 2: خدمة + حي + أداة ربط (مثال: مشوار الى قباء / تكسي للحرم)
+    elif has_service and len(found_locations) >= 1 and has_connector:
         should_reply = True
-        
-    # أمر الأدمن اليدوي
+    
+    # النمط 3: طلب مباشر قصير وواضح (مثال: توصيل المطار / أبي مشوار العالية)
+    elif has_service and len(found_locations) >= 1 and is_short_msg:
+        should_reply = True
+
+    # فحص خاص للآدمن للاختبار
     if msg_clean == "رن" and user.id in ADMIN_IDS:
         should_reply = True
 
-    # ========================== الرد ==========================
-        # ========================== الرد ==========================
+    # ------------------------------------------------------------------
+    # ✅ إرسال الرد
+    # ------------------------------------------------------------------
     if should_reply:
         welcome_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
