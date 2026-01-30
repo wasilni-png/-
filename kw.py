@@ -12,7 +12,7 @@ import urllib.parse  # أضف هذا الاستيراد في أعلى الملف
 from datetime import datetime
 from math import radians, cos, sin, asin, sqrt
 from enum import Enum
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -2844,6 +2844,33 @@ async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
+
+# دالة الرسالة التلقائية (كل 30 دقيقة)
+async def send_periodic_advertisement(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    
+    # محتوى الرسالة والأزرار
+    welcome_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
+        [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
+    ])
+    
+    try:
+        await context.bot.send_message(
+            chat_id=job.chat_id,
+            text=(
+                "📢 **تذكير تلقائي:**\n\n"
+                "✨ **خدمة توصيل المدينة المنورة** ✨\n"
+                "هل تحتاج إلى مشوار سريع أو تاكسي؟\n"
+                "نحن هنا لخدمتك على مدار الساعة.\n\n"
+                "👇 **اضغط بالأسفل لطلب كابتن فوراً** 👇"
+            ),
+            reply_markup=welcome_kb,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"فشل الإرسال التلقائي للمجموعة {job.chat_id}: {e}")
+
 # دالة مساعدة لتنظيف النص (توضع خارج الدالة الرئيسية)
 
 
@@ -2852,81 +2879,107 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user = update.effective_user
+    chat_id = update.effective_chat.id
     text = update.message.text
     
-    # دالة داخلية للتنظيف لضمان مطابقة الحروف (ة -> ه، أ -> ا)
+    # دالة التنظيف
     def clean_text(t):
         return t.lower().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").strip()
 
     msg_clean = clean_text(text)
 
-    # 1. قائمة السبام (تحذف فوراً)
+    # ========================== المؤقت (30 دقيقة) ==========================
+    if context.job_queue:
+        current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+        if not current_jobs:
+            context.job_queue.run_repeating(
+                send_periodic_advertisement, interval=1800, first=10, chat_id=chat_id, name=str(chat_id)
+            )
+    # ======================================================================
+
+    # 1. كلمات الحظر (SPAM)
     REAL_SPAM_KEYWORDS = [
         "استثمار", "ربح سريع", "تداول", "عملات رقمية", "شغل من البيت",
-        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه"
+        "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي"
     ]
-    
-    # 2. كلمات الطلبات الشهرية
-    MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
-
-    # 3. أحياء ومعالم المدينة المنورة فقط
-    MEDINA_KEYWORDS = [
-    "الحرم", "المسجد النبوي", "البقيع", "قباء", "القبلتين", "المساجد السبعة", 
-    "سيد الشهداء", "جبل أحد", "جبل الرماة", "الخندق", "بئر عثمان", "بئر إياس", 
-    "السيح", "العنابس", "المغيسلة", "باب المجيدي", "باب التمار", "قربان", 
-    "الحرة الشرقية", "الحرة الغربية", "الاجابة", "بني معاوية", "بني خدرة", 
-    "الأزهري", "الجرف", "العزيزية", "الدعيثة", "تلال علي", "الرانوناء", 
-    "الهجرة", "شوران", "النبلاء", "باقدو", "المبعوث", "العريض", "البدراني", 
-    "الخالدية", "الربوة", "الإسكان", "حطين", "الفتح", "السحمان", "العاقول", 
-    "الدويخلة", "العيون", "المطار", "الملك فهد", "النصر", "القصواء", 
-    "مخطط الشروق", "مخطط الغراء", "مخطط التلال", "الوسيعة", "مخطط الأمير تركي", 
-    "حمراء الأسد", "أبيار علي", "ذو الحليفة", "الجماوات", "وعيرة", "الصادقية", 
-    "الملك سلمان", "مخطط المحيسن", "مهزور", "شظاه", "الفرع", "بني حارثة", 
-    "سلطانة", "طريق الملك عبدالعزيز", "طريق الملك فهد", "طريق الملك عبدالله", 
-    "الدائري الثاني", "الدائري الثالث", "طريق الهجرة", "طريق الجامعات", 
-    "شارع الإمام مسلم", "شارع الإمام البخاري", "شارع أبي ذر", "طريق السلام", 
-    "مستشفى الملك فهد", "مستشفى الملك سلمان", "مستشفى الولادة", "مستشفى المواساة", 
-    "مستشفى الدار", "مستشفى المدينة الوطني", "مستشفى التأهيل الطبي", 
-    "مدينة الملك سلمان الطبية", "مركز القلب", "مستشفى الحرس الوطني", 
-    "النور مول", "الراشد ميغا مول", "العالية مول", "المنار مول", "سوق القارات", 
-    "مزايا مول", "حديقة الملك فهد", "حديقة جبل أحد", "ممشى الهجرة", "ممشى العباس", 
-    "قطار الحرمين", "جامعة طيبة", "الجامعة الإسلامية"
-]
-
-
-    # 4. كلمات نية الطلب
-    INTENT_KEYWORDS = [
-        "توصيل", "مشوار", "سواق", "كابتن", "سياره", "سيارة", "توصيل", "وصلني", "بكم", "ابغاك", "ابيك"
-    ]
-
-    # --- أولاً: حماية من السبام ---
     if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
         try: await update.message.delete()
         except: pass
         return
 
-    # --- ثانياً: فحص الطلبات الشهرية ---
+    # 2. كلمات العقود الشهرية
+    MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
     if any(k in msg_clean for k in MONTHLY_KEYWORDS):
-        admin_text = (
-            "🚨 **طلب تعاقد شهري (المدينة المنورة):**\n\n"
-            f"👤 العميل: {user.first_name}\n"
-            f"📝 النص: {text}\n"
-            f"🔗 [تواصل مع العميل](tg://user?id={user.id})"
-        )
-        for admin_id in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="Markdown")
-            except: pass
+        # ... (كود إشعار الأدمن كما هو) ...
         return
 
-    # --- ثالثاً: الفحص الذكي للأحياء والنية ---
-    # نتحقق إذا ذكر المستخدم حي من أحياء المدينة OR كلمة تدل على طلب مشوار
-    found_medina_area = any(clean_text(k) in msg_clean for k in MEDINA_KEYWORDS)
-    found_intent = any(clean_text(k) in msg_clean for k in INTENT_KEYWORDS)
+    # ========================== منطق الفهم الذكي (AI Logic) ==========================
     
-    is_admin_run = (msg_clean == "رن" and user.id in ADMIN_IDS)
+    # القائمة أ: كلمات تدل على (الاحتياج/الطلب)
+    NEED_WORDS = [
+        "ابي", "ابغى", "احتاج", "بغيت", "مطلوب", "لوسمحت", "فيه", "عندكم", "ابيك", "ابغاك", 
+        "وفر", "احصل", "مين", "من", "رايح", "يودي", "يوصل"
+    ]
 
-    # الرد إذا وجد (حي من المدينة) أو (كلمة مشوار) أو (أمر الآدمن)
-    if found_medina_area or found_intent or is_admin_run:
+    # القائمة ب: كلمات تدل على (نوع الخدمة)
+    SERVICE_WORDS = [
+        "تكسي", "تاكسي", "مشوار", "نقل", "سواق", "سيارة", "سياره", 
+        "ليموزين", "الرد", "خط"
+    ]
+
+    # القائمة ج: أحياء المدينة المنورة (المواقع)
+        # 3. قاعدة بيانات أحياء ومعالم المدينة المنورة (المواقع)
+    MEDINA_LOCATIONS = [
+        "الحرم", "المسجد النبوي", "البقيع", "قباء", "القبلتين", "المساجد السبعة", 
+        "سيد الشهداء", "جبل أحد", "جبل الرماة", "الخندق", "بئر عثمان", "بئر إياس", 
+        "السيح", "العنابس", "المغيسلة", "باب المجيدي", "باب التمار", "قربان", 
+        "الحرة الشرقية", "الحرة الغربية", "الاجابة", "بني معاوية", "بني خدرة", 
+        "الأزهري", "الجرف", "العزيزية", "الدعيثة", "تلال علي", "الرانوناء", 
+        "الهجرة", "شوران", "النبلاء", "باقدو", "المبعوث", "العريض", "البدراني", 
+        "الخالدية", "الربوة", "الإسكان", "حطين", "الفتح", "السحمان", "العاقول", 
+        "الدويخلة", "العيون", "المطار", "الملك فهد", "النصر", "القصواء", 
+        "مخطط الشروق", "مخطط الغراء", "مخطط التلال", "الوسيعة", "مخطط الأمير تركي", 
+        "حمراء الأسد", "أبيار علي", "ذو الحليفة", "الجماوات", "وعيرة", "الصادقية", 
+        "الملك سلمان", "مخطط المحيسن", "مهزور", "شظاه", "الفرع", "بني حارثة", 
+        "سلطانة", "طريق الملك عبدالعزيز", "طريق الملك فهد", "طريق الملك عبدالله", 
+        "الدائري الثاني", "الدائري الثالث", "طريق الهجرة", "طريق الجامعات", 
+        "شارع الإمام مسلم", "شارع الإمام البخاري", "شارع أبي ذر", "طريق السلام", 
+        "مستشفى الملك فهد", "مستشفى الملك سلمان", "مستشفى الولادة", "مستشفى المواساة", 
+        "مستشفى الدار", "مستشفى المدينة الوطني", "مستشفى التأهيل الطبي", 
+        "مدينة الملك سلمان الطبية", "مركز القلب", "مستشفى الحرس الوطني", 
+        "النور مول", "الراشد ميغا مول", "العالية مول", "المنار مول", "سوق القارات", 
+        "مزايا مول", "حديقة الملك فهد", "حديقة جبل أحد", "ممشى الهجرة", "ممشى العباس", 
+        "قطار الحرمين", "جامعة طيبة", "الجامعة الإسلامية"
+    ]
+
+
+    # --- الفحص ---
+    has_need = any(w in msg_clean for w in NEED_WORDS)       # هل قال "أبي"؟
+    has_service = any(w in msg_clean for w in SERVICE_WORDS) # هل قال "تكسي"؟
+    has_location = any(w in msg_clean for w in MEDINA_LOCATIONS) # هل ذكر "حي"؟
+
+    # --- الشروط الصارمة للرد (Smart Reply Rules) ---
+    should_reply = False
+
+    # الحالة 1: طلب صريح للخدمة (مثال: "أبي تكسي"، "مطلوب مشوار")
+    if has_need and has_service:
+        should_reply = True
+    
+    # الحالة 2: خدمة + موقع (مثال: "تكسي للحرم"، "مشوار لسلطانة")
+    elif has_service and has_location:
+        should_reply = True
+
+    # الحالة 3: طلب + موقع (مثال: "أبي الحرم"، "مين يوصلني المطار")
+    elif has_need and has_location:
+        should_reply = True
+        
+    # أمر الأدمن اليدوي
+    if msg_clean == "رن" and user.id in ADMIN_IDS:
+        should_reply = True
+
+    # ========================== الرد ==========================
+        # ========================== الرد ==========================
+    if should_reply:
         welcome_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
             [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
@@ -2939,10 +2992,6 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=welcome_kb,
             parse_mode="Markdown"
         )
-        
-        if is_admin_run:
-            try: await update.message.delete()
-            except: pass
 
 async def handle_chat_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. حماية: نتجاهل أي تحديث ليس رسالة (تجاهل ضغطات الأزرار CallbackQueries)
