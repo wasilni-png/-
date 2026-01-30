@@ -36,7 +36,8 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop
 from telegram.request import HTTPXRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import MessageHandler, filters, ContextTypes
+from telegram.ext import MessageHandler, filters, ContextTypes, ChatMemberHandler
+
 # إعداد السيرفر لـ Render
 app = Flask('')
 
@@ -2059,7 +2060,33 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text("⚠️ لا يوجد كباتن توصيل طلبات مسجلين حالياً.")
 
+        # ... (داخل دالة handle_callbacks) ...
     
+    # معالجة أزرار المجموعات
+    elif data.startswith("admin_msg_"):
+        gid = data.split("_")[2]
+        context.user_data['target_group'] = gid
+        context.user_data['state'] = 'WAITING_GROUP_MSG'
+        await query.message.reply_text(f"📝 **وضع المراسلة:**\nأرسل الآن الرسالة التي تريد نشرها في المجموعة `{gid}`:")
+        await query.answer()
+        return
+
+    elif data.startswith("admin_leave_"):
+        gid = data.split("_")[2]
+        try:
+            await context.bot.leave_chat(chat_id=gid)
+            
+            # حذف من القاعدة
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM bot_groups WHERE group_id = %s", (gid,))
+                conn.commit()
+            
+            await query.edit_message_text(f"✅ تم الخروج من المجموعة `{gid}` بنجاح.")
+        except Exception as e:
+            await query.answer(f"❌ خطأ: {e}", show_alert=True)
+        return
+
     # ===============================================================
     # [B] قسم الراكب: البحث عن كابتن (النخبة)
     # ===============================================================
@@ -2535,6 +2562,132 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+# ---------------------------------------------------------
+# نظام إدارة المجموعات (Admin Group Management)
+# ---------------------------------------------------------
+
+# 1. دالة تتبع دخول وخروج البوت من المجموعات تلقائياً
+async def on_status_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    result = update.my_chat_member
+    if not result: return
+    
+    chat = result.chat
+    
+    # نتحقق أن التحديث يخص مجموعة وليس محادثة خاصة
+    if chat.type in ['group', 'supergroup']:
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    new_status = result.new_chat_member.status
+                    # التعديل داخل دالة on_status_change
+                    if new_status in ['member', 'administrator']:
+                        cur.execute("""
+                            INSERT INTO bot_groups (group_id, title) 
+                            VALUES (%s, %s) 
+                            ON CONFLICT (group_id) 
+                            DO UPDATE SET title = EXCLUDED.title
+                        """, (chat.id, chat.title))
+
+                    
+                    # إذا غادر البوت أو تم طرده
+                    elif new_status in ['left', 'kicked']:
+                        cur.execute("DELETE FROM bot_groups WHERE group_id = %s", (chat.id,))
+                        print(f"❌ Left group: {chat.title}")
+                        
+                    conn.commit()
+            except Exception as e:
+                print(f"Error updating group status: {e}")
+            finally:
+                conn.close()
+
+
+# 2. دالة عرض المجموعات للأدمن (يتم استدعاؤها بـ /groups)
+async def list_groups_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS: return
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT group_id, title FROM bot_groups")
+                groups = cur.fetchall()
+                
+                if not groups:
+                    await update.message.reply_text("❌ البوت غير موجود في أي مجموعات حالياً.")
+                    return
+
+                text = "📋 **لوحة التحكم بالمجموعات:**\n\n"
+                
+                # سنقوم بعرض المجموعات، ونظراً لقيود طول الرسالة، سنرسل كل مجموعة مع أزرارها
+                await update.message.reply_text(f"🔢 عدد المجموعات النشطة: {len(groups)}")
+                
+                for gid, title in groups:
+                    group_text = f"🔹 **المجموعة:** {title}\n🆔 ID: `{gid}`"
+                    
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("✉️ مراسلة", callback_data=f"admin_msg_{gid}"),
+                            InlineKeyboardButton("🚪 مغادرة", callback_data=f"admin_leave_{gid}")
+                        ]
+                    ]
+                    
+                    await update.message.reply_text(
+                        group_text, 
+                        reply_markup=InlineKeyboardMarkup(keyboard), 
+                        parse_mode="Markdown"
+                    )
+        finally:
+            conn.close()
+
+
+# 3. معالجة الرسائل الموجهة للمجموعات (توضع داخل دالة استقبال النصوص العامة)
+# ملاحظة: يجب دمج منطق هذا الجزء داخل دالة handle_message الموجودة لديك
+async def handle_admin_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = context.user_data.get('state')
+    
+    if user_id in ADMIN_IDS and state == 'WAITING_GROUP_MSG':
+        target_gid = context.user_data.get('target_group')
+        text_to_send = update.message.text
+        
+        if not target_gid:
+            await update.message.reply_text("❌ خطأ: لم يتم تحديد مجموعة.")
+            context.user_data['state'] = None
+            return
+
+        try:
+            # إرسال الرسالة للمجموعة
+            await context.bot.send_message(chat_id=target_gid, text=text_to_send)
+            await update.message.reply_text(f"✅ تم الإرسال للمجموعة بنجاح.")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ فشل الإرسال (قد يكون البوت طُرد): {e}")
+        
+        # إعادة تعيين الحالة
+        context.user_data['state'] = None
+        context.user_data['target_group'] = None
+        return True # لإخبار النظام أن الرسالة تمت معالجتها
+    
+    return False
+
+async def track_groups_from_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    # التحقق أن الرسالة من مجموعة وليست خاص
+    if chat and chat.type in ['group', 'supergroup']:
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO bot_groups (group_id, title) 
+                        VALUES (%s, %s) 
+                        ON CONFLICT (group_id) 
+                        DO UPDATE SET title = EXCLUDED.title
+                    """, (chat.id, chat.title))
+                    conn.commit()
+            except: pass
+            finally: conn.close()
 
 
 async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3321,8 +3474,8 @@ def main():
 
 # أضف هذا السطر لمراقبة كلمة "احياء" في المجموعات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.Regex("^(احياء|الأحياء|الأحياء المتاحة)$"), group_districts_handler), group=0)
-
-
+    application.add_handler(CommandHandler("groups", list_groups_admin), group=0)
+    application.add_handler(ChatMemberHandler(on_status_change, ChatMemberHandler.MY_CHAT_MEMBER), group=0)
     # هذا السطر سيلتقط أي عضو جديد يدخل المجموعة
     
 
@@ -3338,7 +3491,7 @@ def main():
     # يُفضل وضع معالج الإنهاء في مجموعة أولوية (group=-1) 
 # لضمان اعتراضه قبل أن يذهب النص لمعالج الـ Proxy أو الـ Global
     
-
+    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND, handle_admin_group_message), group=1)
     # يوضع في مجموعة (group) ليعمل مع بقية الأوامر
     
     
@@ -3357,6 +3510,8 @@ def main():
         filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO | filters.LOCATION) & ~filters.COMMAND, 
         global_handler
     ), group=2)
+    
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS, track_groups_from_messages), group=2)
 
 
     # ---------------------------------------------------------
