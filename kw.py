@@ -2883,14 +2883,15 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     text = update.message.text
     
-    # دالة تنظيف النص (توحيد الأحرف العربية)
     def clean_text(t):
         return t.lower().replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").strip()
 
     msg_clean = clean_text(text)
+    # تقطيع الرسالة إلى كلمات للتأكد من أنها كلمة واحدة فقط
+    words = msg_clean.split()
 
     # ------------------------------------------------------------------
-    # 🕒 تشغيل المؤقت التلقائي عند أول رسالة (كل 30 دقيقة = 1800 ثانية)
+    # 🕒 تشغيل المؤقت التلقائي (يبقى كما هو)
     # ------------------------------------------------------------------
     if context.job_queue:
         current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
@@ -2902,81 +2903,23 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 chat_id=chat_id, 
                 name=str(chat_id)
             )
-            print(f"✅ تم تفعيل الإرسال الدوري للمجموعة: {chat_id}")
 
     # ------------------------------------------------------------------
-    # 🗂️ قواعد البيانات والقوائم
+    # 1. حذف السبام فوراً (يبقى كما هو)
     # ------------------------------------------------------------------
-    
-    # 1. قائمة السبام الخطيرة (حذف فوري)
     REAL_SPAM_KEYWORDS = [
         "استثمار", "ربح سريع", "تداول", "عملات رقمية", "شغل من البيت",
         "سيكليف", "سيكليفات", "سكليف", "سكليفات", "عذر طبي", "اعذار طبيه"
     ]
-
-    # 2. قائمة العقود الشهرية (إشعار فقط)
-    MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
-
-    # 3. أحياء ومعالم المدينة المنورة (المواقع)
-    MEDINA_LOCATIONS = [
-        "الحرم", "المسجد النبوي", "البقيع", "قباء", "القبلتين", "المساجد السبعة", 
-        "سيد الشهداء", "جبل أحد", "جبل الرماة", "الخندق", "بئر عثمان", "بئر إياس", 
-        "السيح", "العنابس", "المغيسلة", "باب المجيدي", "باب التمار", "قربان", 
-        "الحرة الشرقية", "الحرة الغربية", "الاجابة", "بني معاوية", "بني خدرة", 
-        "الأزهري", "الجرف", "العزيزية", "الدعيثة", "تلال علي", "الرانوناء", 
-        "الهجرة", "شوران", "النبلاء", "باقدو", "المبعوث", "العريض", "البدراني", 
-        "الخالدية", "الربوة", "الإسكان", "حطين", "الفتح", "السحمان", "العاقول", 
-        "الدويخلة", "العيون", "المطار", "الملك فهد", "النصر", "القصواء", 
-        "مخطط الشروق", "مخطط الغراء", "مخطط التلال", "الوسيعة", "مخطط الأمير تركي", 
-        "حمراء الأسد", "أبيار علي", "ذو الحليفة", "الجماوات", "وعيرة", "الصادقية", 
-        "الملك سلمان", "مخطط المحيسن", "مهزور", "شظاه", "الفرع", "بني حارثة", 
-        "سلطانة", "طريق الملك عبدالعزيز", "طريق الملك فهد", "طريق الملك عبدالله", 
-        "الدائري الثاني", "الدائري الثالث", "طريق الهجرة", "طريق الجامعات", 
-        "شارع الإمام مسلم", "شارع الإمام البخاري", "شارع أبي ذر", "طريق السلام", 
-        "مستشفى الملك فهد", "مستشفى الملك سلمان", "مستشفى الولادة", "مستشفى المواساة", 
-        "مستشفى الدار", "مستشفى المدينة الوطني", "مستشفى التأهيل الطبي", 
-        "مدينة الملك سلمان الطبية", "مركز القلب", "مستشفى الحرس الوطني", 
-        "النور مول", "الراشد ميغا مول", "العالية مول", "المنار مول", "سوق القارات", 
-        "مزايا مول", "حديقة الملك فهد", "حديقة جبل أحد", "ممشى الهجرة", "ممشى العباس", 
-        "قطار الحرمين", "جامعة طيبة", "الجامعة الإسلامية"
-    ]
-
-    # 4. قوائم الاستبعاد (لعدم الرد على البيع والشراء والنقاشات)
-    EXCLUDE_KEYWORDS = [
-        "بيع", "شراء", "حراج", "سوم", "مسيوم", "للبيع", "اشتري", "اشري", "شاري",
-        "استبدال", "بدل", "قطع", "معدات", "مطلوب شراء", "معروض", "للتقبيل", "للتنازل",
-        "نظيف", "ممشى", "موديل", "مكينة", "قير", "فحص", "استمارة", "مصدوم", "تشليح",
-        "كم سيم", "كم وصل", "حدي", "مالي حد", "على السوم", "جديد", "مستعمل", "مخزن"
-    ]
-    
-    NON_TAXI_KEYWORDS = [
-        "عفش", "دينا", "سطحه", "سطحة", "ايجار", "إيجار", "ورشة", "ورشه", "ميكانيكي",
-        "اقساط", "أقساط", "غسيل", "تنظيف", "نقل بضائع", "تحميل", "تنزيل", "عمال", "شحن",
-        "سباك", "كهربائي", "ترميم", "تأجير", "تريلة", "وايت", "بوز", "قلاب", "بوبكات"
-    ]
-    
-    GENERAL_QUESTIONS = [
-        "افضل", "أفضل", "ارخص", "أرخص", "ايش احسن", "وش احسن", "تعرفون", "يا شباب",
-        "بكم المشوار", "بكم التوصيل", "سؤال", "استفسار", "احد جرب", "رايكم", "رأيكم",
-        "وظيفة", "وظائف", "أدور شغل", "مندوب", "تسويق", "إعلان", "اعلان", "قروب",
-        "تحذير", "نصاب", "مفقودات", "ضيعت", "لقيت", "زحمة", "طريق", "تفتيش", "ساهر"
-    ]
-
-    # 5. كلمات الخدمة والربط
-    SERVICE_WORDS = ["مشوار", "توصيل", "تكسي", "تاكسي", "وصلني", "ودني", "سواق", "كابتن", "سيارة", "سياره"]
-    CONNECTORS = ["من", "الي", "الى", "لـ", "لحي", "عند"]
-
-    # ------------------------------------------------------------------
-    # 🚀 بدء عمليات الفحص والمنطق
-    # ------------------------------------------------------------------
-
-    # 1. حذف السبام فوراً
     if any(k in msg_clean for k in REAL_SPAM_KEYWORDS):
         try: await update.message.delete()
         except: pass
         return
 
-    # 2. إشعار الآدمن بالطلبات الشهرية
+    # ------------------------------------------------------------------
+    # 2. إشعار الآدمن بالطلبات الشهرية (يبقى كما هو)
+    # ------------------------------------------------------------------
+    MONTHLY_KEYWORDS = ["شهري", "عقد", "مشوار شهري", "نقل طالبات", "نقل موظفات"]
     if any(k in msg_clean for k in MONTHLY_KEYWORDS):
         admin_text = (
             "🚨 **طلب تعاقد شهري (المدينة المنورة):**\n\n"
@@ -2989,39 +2932,20 @@ async def group_order_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE
             except: pass
         return
 
-    # 3. دمج قوائم الاستبعاد والفحص
-    ALL_EXCLUDES = EXCLUDE_KEYWORDS + NON_TAXI_KEYWORDS + GENERAL_QUESTIONS
-    if any(w in msg_clean for w in ALL_EXCLUDES):
-        return  # توقف هنا، الرسالة ليست طلب مشوار
-
-    # 4. تحليل نمط الرسالة (Pattern Recognition)
+    # ------------------------------------------------------------------
+    # 🚀 منطق الرد الجديد: الكلمات الثلاث فقط ومفردة
+    # ------------------------------------------------------------------
     
-    # البحث عن الأحياء المذكورة
-    found_locations = [loc for loc in MEDINA_LOCATIONS if clean_text(loc) in msg_clean]
+    # الكلمات المسموح بها
+    TARGET_WORDS = ["مشوار", "تكسي", "تاكسي"]
     
-    # البحث عن كلمات الخدمة والربط
-    has_service = any(w in msg_clean for w in SERVICE_WORDS)
-    has_connector = any(w in msg_clean for w in CONNECTORS)
-    
-    # فحص طول الرسالة (استبعاد القصص الطويلة)
-    is_short_msg = len(msg_clean.split()) < 15
-
-    # --- منطق الرد النهائي ---
     should_reply = False
 
-    # النمط الذهبي 1: ذكر حيين مختلفين (مثال: من العزيزية للحرم)
-    if len(found_locations) >= 2:
+    # الشرط: أن تتكون الرسالة من كلمة واحدة فقط، وأن تكون ضمن القائمة
+    if len(words) == 1 and words[0] in TARGET_WORDS:
         should_reply = True
 
-    # النمط 2: خدمة + حي + أداة ربط (مثال: مشوار الى قباء / تكسي للحرم)
-    elif has_service and len(found_locations) >= 1 and has_connector:
-        should_reply = True
-    
-    # النمط 3: طلب مباشر قصير وواضح (مثال: توصيل المطار / أبي مشوار العالية)
-    elif has_service and len(found_locations) >= 1 and is_short_msg:
-        should_reply = True
-
-    # فحص خاص للآدمن للاختبار
+    # ميزة إضافية: كلمة "رن" للمسؤول للاختبار
     if msg_clean == "رن" and user.id in ADMIN_IDS:
         should_reply = True
 
@@ -3464,6 +3388,64 @@ async def admin_list_users(update, context, page=0):
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
+# 3. أمر إرسال صورة ونص للسائقين (للمسؤولين فقط)
+# ==============================================================================
+async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 1. التحقق من أن المستخدم آدمن
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هذا الأمر مخصص للمسؤولين فقط.")
+        return
+
+    # 2. التحقق من وجود صورة
+    if not update.message.photo:
+        await update.message.reply_text("💡 **طريقة الاستخدام:**\nأرسل صورة وضع في الوصف (Caption) الأمر `/picsend` متبوعاً بالنص الذي تريده.")
+        return
+
+    # 3. استخراج البيانات
+    photo_file_id = update.message.photo[-1].file_id
+    raw_caption = update.message.caption if update.message.caption else ""
+    
+    # إزالة كلمة الأمر من النص ليبقى الكلام الموجه للسائقين فقط
+    final_text = raw_caption.replace("/picsend", "").strip()
+
+    # 4. جلب قائمة السائقين (استبدل هذه القائمة بجلب البيانات من قاعدة بياناتك)
+    # مثال: DRIVERS_LIST = db.get_all_drivers()
+    DRIVERS_LIST = [12345678, 87654321] # قائمة تجريبية
+
+    if not DRIVERS_LIST:
+        await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين في قاعدة البيانات.")
+        return
+
+    status_msg = await update.message.reply_text(f"⏳ جاري الإرسال إلى {len(DRIVERS_LIST)} كابتن...")
+
+    success = 0
+    failed = 0
+
+    # 5. حلقة الإرسال
+    for driver_id in DRIVERS_LIST:
+        try:
+            await context.bot.send_photo(
+                chat_id=driver_id,
+                photo=photo_file_id,
+                caption=final_text,
+                parse_mode="Markdown"
+            )
+            success += 1
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ **اكتمل الإرسال الجماعي**\n\n"
+        f"🟢 تم بنجاح: {success}\n"
+        f"🔴 فشل (بوت محظور): {failed}"
+    )
+
+# ------------------------------------------------------------------
+# ⚠️ لا تنسى إضافة المعالج (Handler) داخل دالة main:
+# 
+# ------------------------------------------------------------------
 
 async def admin_show_user_details(update, context, target_id):
     query = update.callback_query
@@ -3525,7 +3507,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
-
+    application.add_handler(CommandHandler("picsend", admin_pic_send), group=0)
 
     
     # 1. كأمر مباشر /make_delivery
