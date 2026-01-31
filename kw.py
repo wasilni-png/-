@@ -3451,8 +3451,6 @@ async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔴 فشل (بوت محظور): {failed}"
     )
 
-# لا تنسَ إضافة الهاندلر في دالة main:
-# application.add_handler(MessageHandler(filters.PHOTO & filters.Caption(["/picsend"]), admin_pic_send))
 
 # ------------------------------------------------------------------
 # ⚠️ لا تنسى إضافة المعالج (Handler) داخل دالة main:
@@ -3520,9 +3518,12 @@ def main():
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
     application.add_handler(
-    MessageHandler(filters.PHOTO & filters.Caption(["/picsend"]), admin_pic_send), 
-    group=0
+    
+    # بدلاً من السطر القديم، استخدم هذا السطر بدقة:
+    application.add_handler(
+    MessageHandler(filters.PHOTO & filters.CaptionContains(["/picsend"]), admin_pic_send)
 )
+
 
 
 
