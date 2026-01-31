@@ -3120,48 +3120,64 @@ async def broadcast_to_drivers(update: Update, context: ContextTypes.DEFAULT_TYP
     if user_id not in ADMIN_IDS:
         return
 
-    # 2. التأكد من وجود نص للرسالة
-    if not context.args:
+    # 2. استخراج النص (سواء من الرد على رسالة أو من نص الأمر نفسه)
+    broadcast_msg = ""
+    if update.message.reply_to_message:
+        # إذا قمت بعمل ريبلي على رسالة نصية
+        broadcast_msg = update.message.reply_to_message.text
+    elif context.args:
+        # إذا كتبت النص بعد الأمر مباشرة
+        broadcast_msg = " ".join(context.args)
+    
+    if not broadcast_msg:
         await update.message.reply_text(
-            "⚠️ **خطأ:** يرجى كتابة الرسالة بعد الأمر.\n"
-            "مثال: `/send_drivers السلام عليكم يا كباتن، يرجى تحديث اللوحات`",
+            "⚠️ **خطأ:** يرجى كتابة الرسالة بعد الأمر أو الرد على رسالة نصية.\n"
+            "مثال: `/send_drivers السلام عليكم كباتنا`",
             parse_mode="Markdown"
         )
         return
 
-    broadcast_msg = " ".join(context.args)
-    
-    # 3. جلب السائقين فقط من الكاش أو قاعدة البيانات
-    # نفترض أن USER_CACHE يحتوي على بيانات المستخدمين مع 'role'
-    drivers = [u_id for u_id, data in USER_CACHE.items() if data.get('role') == 'driver']
-    
+    # 3. جلب السائقين مباشرة من قاعدة البيانات (لضمان الدقة)
+    drivers = []
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # التأكد من مطابقة قيمة role في قاعدة بياناتك (driver)
+                cur.execute("SELECT user_id FROM users WHERE role = %s", ('driver',))
+                rows = cur.fetchall()
+                drivers = [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"Error fetching drivers: {e}")
+        finally:
+            conn.close()
+
     if not drivers:
         await update.message.reply_text("❌ لم يتم العثور على سائقين مسجلين في القاعدة.")
         return
 
-    await update.message.reply_text(f"⏳ جاري إرسال الرسالة إلى {len(drivers)} كابتن... يرجى الانتظار.")
+    status_msg = await update.message.reply_text(f"⏳ جاري إرسال النص إلى {len(drivers)} كابتن...")
 
     success = 0
     fail = 0
 
+    # 4. حلقة الإرسال
     for d_id in drivers:
         try:
-            # إرسال الرسالة بتنسيق رسمي
             await context.bot.send_message(
                 chat_id=d_id,
-                text=f"📢 **إشعار إداري للكباتن فقط:**\n\n{broadcast_msg}",
+                text=f"📢 **إشعار إداري جديد:**\n\n{broadcast_msg}",
                 parse_mode="Markdown"
             )
             success += 1
-            # تأخير بسيط جداً لتجنب حظر تليجرام عند الإرسال الجماعي
-            await asyncio.sleep(0.05) 
+            await asyncio.sleep(0.05) # حماية من Flood تليجرام
         except Exception:
             fail += 1
 
-    await update.message.reply_text(
-        f"✅ **اكتملت عملية الإرسال!**\n\n"
-        f"🟢 تم بنجاح: {success}\n"
-        f"🔴 فشل (بوت محظور): {fail}"
+    await status_msg.edit_text(
+        f"✅ **اكتمل إرسال التعميم النصي!**\n\n"
+        f"🟢 نجاح: {success}\n"
+        f"🔴 فشل: {fail}"
     )
 
 async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3387,73 +3403,69 @@ async def admin_list_users(update, context, page=0):
 
 # 3. أمر إرسال صورة ونص للسائقين (للمسؤولين فقط)
 # ==============================================================================
-async def broadcast_to_drivers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # 1. التحقق من صلاحية الأدمن
+    # 1. التحقق من أن المستخدم آدمن
     if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هذا الأمر مخصص للمسؤولين فقط.")
         return
 
-    # 2. استخراج النص (سواء من الرد على رسالة أو من نص الأمر نفسه)
-    broadcast_msg = ""
-    if update.message.reply_to_message:
-        # إذا قمت بعمل ريبلي على رسالة نصية
-        broadcast_msg = update.message.reply_to_message.text
-    elif context.args:
-        # إذا كتبت النص بعد الأمر مباشرة
-        broadcast_msg = " ".join(context.args)
-    
-    if not broadcast_msg:
-        await update.message.reply_text(
-            "⚠️ **خطأ:** يرجى كتابة الرسالة بعد الأمر أو الرد على رسالة نصية.\n"
-            "مثال: `/send_drivers السلام عليكم كباتنا`",
-            parse_mode="Markdown"
-        )
+    # 2. التحقق من وجود صورة في الرسالة
+    if not update.message.photo:
+        await update.message.reply_text("💡 **طريقة الاستخدام:**\nأرسل صورة وضع في الوصف (Caption) الأمر `/picsend` متبوعاً بالنص الذي تريده.")
         return
 
-    # 3. جلب السائقين مباشرة من قاعدة البيانات (لضمان الدقة)
-    drivers = []
+    # 3. استخراج معرف الصورة والنص
+    photo_file_id = update.message.photo[-1].file_id
+    raw_caption = update.message.caption if update.message.caption else ""
+    # تنظيف النص من كلمة الأمر
+    final_text = raw_caption.replace("/picsend", "").strip()
+
+    # 4. جلب معرفات السائقين من قاعدة البيانات مباشرة
+    drivers_to_send = []
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cur:
-                # التأكد من مطابقة قيمة role في قاعدة بياناتك (driver)
-                cur.execute("SELECT user_id FROM users WHERE role = %s", ('driver',))
+                # جلب كل المستخدمين الذين دورهم سائق
+                cur.execute("SELECT user_id FROM users WHERE role = %s", (UserRole.DRIVER.value,))
                 rows = cur.fetchall()
-                drivers = [row[0] for row in rows]
+                drivers_to_send = [row[0] for row in rows]
         except Exception as e:
-            logger.error(f"Error fetching drivers: {e}")
+            logger.error(f"Error fetching drivers for picsend: {e}")
         finally:
             conn.close()
 
-    if not drivers:
-        await update.message.reply_text("❌ لم يتم العثور على سائقين مسجلين في القاعدة.")
+    if not drivers_to_send:
+        await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين في قاعدة البيانات.")
         return
 
-    status_msg = await update.message.reply_text(f"⏳ جاري إرسال النص إلى {len(drivers)} كابتن...")
+    status_msg = await update.message.reply_text(f"⏳ جاري الإرسال الجماعي إلى {len(drivers_to_send)} كابتن...")
 
     success = 0
-    fail = 0
+    failed = 0
 
-    # 4. حلقة الإرسال
-    for d_id in drivers:
+    # 5. حلقة الإرسال مع معالجة الأخطاء (لتجنب توقف البوت إذا حظر أحدهم البوت)
+    for d_id in drivers_to_send:
         try:
-            await context.bot.send_message(
+            await context.bot.send_photo(
                 chat_id=d_id,
-                text=f"📢 **إشعار إداري جديد:**\n\n{broadcast_msg}",
+                photo=photo_file_id,
+                caption=final_text,
                 parse_mode="Markdown"
             )
             success += 1
-            await asyncio.sleep(0.05) # حماية من Flood تليجرام
+            # تأخير بسيط جداً لمنع الـ Flood من تليجرام عند الإرسال لعدد كبير
+            await asyncio.sleep(0.05) 
         except Exception:
-            fail += 1
+            failed += 1
 
     await status_msg.edit_text(
-        f"✅ **اكتمل إرسال التعميم النصي!**\n\n"
-        f"🟢 نجاح: {success}\n"
-        f"🔴 فشل: {fail}"
+        f"✅ **اكتمل الإرسال الجماعي للكباتن**\n\n"
+        f"🟢 تم بنجاح: {success}\n"
+        f"🔴 فشل (بوت محظور): {failed}"
     )
-
 
 
 # ------------------------------------------------------------------
