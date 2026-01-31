@@ -58,7 +58,7 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
+BOT_TOKEN = "8204876736:AAFJCoOjeEp8iFfSvTlFcRaNjO6sBcNZszc"
 ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
@@ -1570,7 +1570,7 @@ async def start_order_timer(context: ContextTypes.DEFAULT_TYPE, messages_info: l
         user_role = user_data.get('role', 'rider')
         is_verified = user_data.get('is_verified', False)
 
-        for minutes_left in range(30, 0, -1):
+        for minutes_left in range(10, 0, -1):
             # تحديث نص الرسالة في بداية كل دقيقة
             try:
                 await context.bot.edit_message_text(
@@ -2325,7 +2325,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # 1. إعداد لوحة مفاتيح الدردشة (داخل الـ if)
                 kb_chat = ReplyKeyboardMarkup([
                     [KeyboardButton("📍 مشاركة موقعي", request_location=True)],
-                    [KeyboardButton("🏁 إنهاء المشوار")]
+                    [KeyboardButton("🏁 إنهاء المشوار والدردشة")]
                 ], resize_keyboard=True)
 
                 # 2. إرسال إشعار للأدمن (داخل الـ if)
