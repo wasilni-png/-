@@ -877,7 +877,7 @@ async def broadcast_general_order(update: Update, context: ContextTypes.DEFAULT_
         dist = get_distance(r_lat, r_lon, d['lat'], d['lon'])
 
         # 3. إرسال الطلب فقط لمن هم في نطاق 15 كم
-        if dist <= 15.0: 
+        if dist <= 10.0: 
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"✅ قبول ({price} ريال)", callback_data=f"accept_gen_{rider_id}_{price}")],
                 [InlineKeyboardButton("💵 اقتراح سعر آخر", callback_data=f"bid_req_{rider_id}")] 
