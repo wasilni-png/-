@@ -91,6 +91,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class UserRole(str, Enum):
+    RIDER = "rider"
+    DRIVER = "driver"
 # ==================== 🗄️ 2. قاعدة البيانات ====================
 def normalize_text(text):
     if not text: return ""
@@ -218,26 +221,24 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
 
 
 
-# دالة تحديث قاعدة البيانات في الخلفية (خارج الدالة الرئيسية للسرعة)
-async def update_db_silent(user_id, lat, lon):
-    conn = None
-    try:
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
-                    (lat, lon, user_id)
-                )
-                conn.commit()
-    except Exception as e:
-        print(f"❌ خطأ في تحديث قاعدة البيانات للخلفية: {e}")
-    finally:
-        if conn: conn.close()
+# افترض أن supabase هو العميل المعرف عالمياً في كودك
+# supabase: Client = create_client(url, key)
 
-class UserRole(str, Enum):
-    RIDER = "rider"
-    DRIVER = "driver"
+async def update_db_silent(user_id, lat, lon):
+    """
+    تحديث الموقع في Supabase بسرعة وبدون حجز موارد البوت
+    """
+    try:
+        # التحديث المباشر عبر API Supabase (أسرع وأخف من SQL التقليدي)
+        # لا نحتاج لفتح وإغلاق اتصال، العميل يدير ذلك داخلياً
+        supabase.table("users").update({
+            "lat": lat,
+            "lon": lon,
+            "last_location_update": "now()" # أو استخدم datetime.now()
+        }).eq("user_id", user_id).execute()
+        
+    except Exception as e:
+        print(f"❌ خطأ Supabase في الخلفية: {e}")
 
 def get_chat_partner(user_id, context=None):
     """جلب معرف الطرف الآخر من قاعدة البيانات مباشرة"""
@@ -1617,46 +1618,52 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lat_val, lon_val = msg.location.latitude, msg.location.longitude
     state = context.user_data.get('state')
+    current_time = time.time()
 
-    # 1. تحديث الكاش المحلي فوراً (أهم خطوة للسرعة مع 1000 كابتن)
+    # جلب بيانات المستخدم من الكاش
+    user_data = USER_CACHE.get(user_id) or {}
+    user_role = user_data.get('role', UserRole.RIDER) # الافتراضي راكب
+
+    # 1. تحديث الكاش المحلي فوراً
     if user_id in USER_CACHE:
         USER_CACHE[user_id]['lat'] = lat_val
         USER_CACHE[user_id]['lon'] = lon_val
     
-    # 2. تحديث قاعدة البيانات "في الخلفية" (بدون تعطيل البوت)
-    asyncio.create_task(update_db_silent(user_id, lat_val, lon_val))
+    # 2. تحديث قاعدة البيانات "بذكاء" (كل 30 ثانية فقط لتجنب الثقل)
+    last_upd = LAST_DB_UPDATE.get(user_id, 0)
+    if (current_time - last_upd) > 60:
+        LAST_DB_UPDATE[user_id] = current_time
+        asyncio.create_task(update_db_silent(user_id, lat_val, lon_val))
 
-    # 3. تمرير الموقع في المحادثات النشطة (يبقى كما هو)
-    partner_id = get_chat_partner(user_id)
-    if partner_id:
-        try:
-            await context.bot.copy_message(chat_id=partner_id, from_chat_id=user_id, message_id=msg.message_id)
-            return 
-        except: pass
+    # 3. تمرير الموقع في المحادثات النشطة (فقط إذا كان هناك شات قائم)
+    if context.user_data.get('in_active_chat'):
+        partner_id = get_chat_partner(user_id)
+        if partner_id:
+            try:
+                await context.bot.copy_message(chat_id=partner_id, from_chat_id=user_id, message_id=msg.message_id)
+                return 
+            except: pass
 
-    user_data = USER_CACHE.get(user_id) or {}
-    user_role = user_data.get('role', 'rider')
-
-    # 4. معالجة السائق (تحديث صامت تماماً)
-    if user_role == 'driver' and state != 'WAIT_LOCATION_FOR_ORDER':
-        if update.message: # حذف الرسالة فقط إذا كانت رسالة جديدة وليست تحديث "حي"
+    # 4. معالجة السائق (استخدام الـ Enum هنا)
+    if user_role == UserRole.DRIVER and state != 'WAIT_LOCATION_FOR_ORDER':
+        if update.message: # حذف الرسالة الجديدة فقط
             try: await update.message.delete()
             except: pass
         return 
 
-    # 4. معالجة الراكب (عند طلب رحلة جديد)
+    # 5. معالجة الراكب (عند طلب رحلة جديد)
     if state == 'WAIT_LOCATION_FOR_ORDER':
-        # إرسال رسالة انتظار أولية
-        processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن قريباً منك...")
+        # تجميد الحالة فوراً لمنع تكرار الطلب مع كل تحرك للراكب
+        context.user_data['state'] = 'SEARCHING'
         
-        # إرسال الطلب للسائقين القريبين
+        processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن قريباً منك...")
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
             keyboard = []
-            for info in sent_info[:10]: # عرض قائمة بأول 10 كباتن وصلهم الطلب
+            for info in sent_info[:10]:
                 d_id = info['chat_id']
-                driver_data = USER_CACHE.get(d_id) or USER_CACHE.get(str(d_id)) or {}
+                driver_data = USER_CACHE.get(d_id) or {}
                 driver_name = driver_data.get('name', 'كابتن متوفر')
                 button = [InlineKeyboardButton(text=f"🚕 {driver_name}", callback_data="none")]
                 keyboard.append(button)
@@ -1668,7 +1675,6 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             try:
-                # تحديث رسالة البحث لتصبح رسالة التأكيد مع قائمة الكباتن
                 await context.bot.edit_message_text(
                     chat_id=user_id,
                     message_id=processing_msg.message_id,
@@ -1677,26 +1683,14 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             except:
-                await context.bot.send_message(
-                    chat_id=user_id, 
-                    text=final_text, 
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="Markdown"
-                )
+                await context.bot.send_message(chat_id=user_id, text=final_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
             
-            # بدء مؤقت انتهاء الطلب
             asyncio.create_task(start_order_timer(context, sent_info, user_id, processing_msg.message_id))
         else:
-            # في حال عدم وجود سائقين في المنطقة
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="⚠️ نعتذر، لا يوجد كباتن متاحين حالياً في موقعك.",
-                reply_markup=get_main_kb("rider", True)
-            )
+            await context.bot.send_message(chat_id=user_id, text="⚠️ نعتذر، لا يوجد كباتن متاحين حالياً.", reply_markup=get_main_kb(UserRole.RIDER, True))
             try: await processing_msg.delete()
             except: pass
         
-        # تصفير الحالة بعد انتهاء الطلب
         context.user_data['state'] = None
 
 
