@@ -3395,49 +3395,64 @@ async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ هذا الأمر مخصص للمسؤولين فقط.")
         return
 
-    # 2. التحقق من وجود صورة
+    # 2. التحقق من وجود صورة في الرسالة
     if not update.message.photo:
         await update.message.reply_text("💡 **طريقة الاستخدام:**\nأرسل صورة وضع في الوصف (Caption) الأمر `/picsend` متبوعاً بالنص الذي تريده.")
         return
 
-    # 3. استخراج البيانات
+    # 3. استخراج معرف الصورة والنص
     photo_file_id = update.message.photo[-1].file_id
     raw_caption = update.message.caption if update.message.caption else ""
-    
-    # إزالة كلمة الأمر من النص ليبقى الكلام الموجه للسائقين فقط
+    # تنظيف النص من كلمة الأمر
     final_text = raw_caption.replace("/picsend", "").strip()
 
-    # 4. جلب قائمة السائقين (استبدل هذه القائمة بجلب البيانات من قاعدة بياناتك)
-    # مثال: DRIVERS_LIST = db.get_all_drivers()
-    DRIVERS_LIST = [12345678, 87654321] # قائمة تجريبية
+    # 4. جلب معرفات السائقين من قاعدة البيانات مباشرة
+    drivers_to_send = []
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # جلب كل المستخدمين الذين دورهم سائق
+                cur.execute("SELECT user_id FROM users WHERE role = %s", (UserRole.DRIVER.value,))
+                rows = cur.fetchall()
+                drivers_to_send = [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"Error fetching drivers for picsend: {e}")
+        finally:
+            conn.close()
 
-    if not DRIVERS_LIST:
+    if not drivers_to_send:
         await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين في قاعدة البيانات.")
         return
 
-    status_msg = await update.message.reply_text(f"⏳ جاري الإرسال إلى {len(DRIVERS_LIST)} كابتن...")
+    status_msg = await update.message.reply_text(f"⏳ جاري الإرسال الجماعي إلى {len(drivers_to_send)} كابتن...")
 
     success = 0
     failed = 0
 
-    # 5. حلقة الإرسال
-    for driver_id in DRIVERS_LIST:
+    # 5. حلقة الإرسال مع معالجة الأخطاء (لتجنب توقف البوت إذا حظر أحدهم البوت)
+    for d_id in drivers_to_send:
         try:
             await context.bot.send_photo(
-                chat_id=driver_id,
+                chat_id=d_id,
                 photo=photo_file_id,
                 caption=final_text,
                 parse_mode="Markdown"
             )
             success += 1
+            # تأخير بسيط جداً لمنع الـ Flood من تليجرام عند الإرسال لعدد كبير
+            await asyncio.sleep(0.05) 
         except Exception:
             failed += 1
 
     await status_msg.edit_text(
-        f"✅ **اكتمل الإرسال الجماعي**\n\n"
+        f"✅ **اكتمل الإرسال الجماعي للكباتن**\n\n"
         f"🟢 تم بنجاح: {success}\n"
         f"🔴 فشل (بوت محظور): {failed}"
     )
+
+# لا تنسَ إضافة الهاندلر في دالة main:
+# application.add_handler(MessageHandler(filters.PHOTO & filters.Caption(["/picsend"]), admin_pic_send))
 
 # ------------------------------------------------------------------
 # ⚠️ لا تنسى إضافة المعالج (Handler) داخل دالة main:
