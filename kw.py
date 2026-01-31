@@ -3387,63 +3387,71 @@ async def admin_list_users(update, context, page=0):
 
 # 3. أمر إرسال صورة ونص للسائقين (للمسؤولين فقط)
 # ==============================================================================
-async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_to_drivers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # 1. التحقق من أن المستخدم آدمن
+    # 1. التحقق من صلاحية الأدمن
     if user_id not in ADMIN_IDS:
         return
 
-    # 2. التحقق مما إذا كان المستخدم قام بعمل ريبلي (Reply)
-    if not update.message.reply_to_message:
-        await update.message.reply_text("💡 **طريقة الاستخدام:**\nقم بالرد (Reply) على الصورة أو الرسالة التي تريد تعميمها واكتب `/picsend`.")
+    # 2. استخراج النص (سواء من الرد على رسالة أو من نص الأمر نفسه)
+    broadcast_msg = ""
+    if update.message.reply_to_message:
+        # إذا قمت بعمل ريبلي على رسالة نصية
+        broadcast_msg = update.message.reply_to_message.text
+    elif context.args:
+        # إذا كتبت النص بعد الأمر مباشرة
+        broadcast_msg = " ".join(context.args)
+    
+    if not broadcast_msg:
+        await update.message.reply_text(
+            "⚠️ **خطأ:** يرجى كتابة الرسالة بعد الأمر أو الرد على رسالة نصية.\n"
+            "مثال: `/send_drivers السلام عليكم كباتنا`",
+            parse_mode="Markdown"
+        )
         return
 
-    replied_msg = update.message.reply_to_message
-    
-    # 3. تحديد نوع المحتوى المردود عليه (صورة أو نص)
-    photo_file_id = replied_msg.photo[-1].file_id if replied_msg.photo else None
-    # النص المردود عليه (سواء كان شرح صورة أو رسالة نصية)
-    final_text = replied_msg.caption if replied_msg.photo else replied_msg.text
-
-    # 4. جلب معرفات السائقين من قاعدة البيانات
-    drivers_to_send = []
+    # 3. جلب السائقين مباشرة من قاعدة البيانات (لضمان الدقة)
+    drivers = []
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT user_id FROM users WHERE role = %s", (UserRole.DRIVER.value,))
-                drivers_to_send = [row[0] for row in cur.fetchall()]
+                # التأكد من مطابقة قيمة role في قاعدة بياناتك (driver)
+                cur.execute("SELECT user_id FROM users WHERE role = %s", ('driver',))
+                rows = cur.fetchall()
+                drivers = [row[0] for row in rows]
         except Exception as e:
             logger.error(f"Error fetching drivers: {e}")
         finally:
             conn.close()
 
-    if not drivers_to_send:
-        await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين.")
+    if not drivers:
+        await update.message.reply_text("❌ لم يتم العثور على سائقين مسجلين في القاعدة.")
         return
 
-    status_msg = await update.message.reply_text(f"⏳ جاري تعميم الرسالة إلى {len(drivers_to_send)} كابتن...")
+    status_msg = await update.message.reply_text(f"⏳ جاري إرسال النص إلى {len(drivers)} كابتن...")
 
     success = 0
-    failed = 0
+    fail = 0
 
-    # 5. حلقة الإرسال
-    for d_id in drivers_to_send:
+    # 4. حلقة الإرسال
+    for d_id in drivers:
         try:
-            if photo_file_id:
-                await context.bot.send_photo(chat_id=d_id, photo=photo_file_id, caption=final_text, parse_mode="Markdown")
-            else:
-                await context.bot.send_message(chat_id=d_id, text=final_text, parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=d_id,
+                text=f"📢 **إشعار إداري جديد:**\n\n{broadcast_msg}",
+                parse_mode="Markdown"
+            )
             success += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05) # حماية من Flood تليجرام
         except Exception:
-            failed += 1
+            fail += 1
 
     await status_msg.edit_text(
-        f"✅ **اكتمل الإرسال الجماعي بنظام الرد**\n\n"
-        f"🟢 تم بنجاح: {success}\n"
-        f"🔴 فشل: {failed}"
+        f"✅ **اكتمل إرسال التعميم النصي!**\n\n"
+        f"🟢 نجاح: {success}\n"
+        f"🔴 فشل: {fail}"
     )
 
 
