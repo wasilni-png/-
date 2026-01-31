@@ -3517,7 +3517,6 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
-    application.add_handler(
     
     # بدلاً من السطر القديم، استخدم هذا السطر بدقة:
     application.add_handler(
