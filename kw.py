@@ -94,6 +94,7 @@ logger = logging.getLogger(__name__)
 class UserRole(str, Enum):
     RIDER = "rider"
     DRIVER = "driver"
+LAST_DB_UPDATE = {}
 # ==================== 🗄️ 2. قاعدة البيانات ====================
 def normalize_text(text):
     if not text: return ""
@@ -221,24 +222,26 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
 
 
 
-# افترض أن supabase هو العميل المعرف عالمياً في كودك
-# supabase: Client = create_client(url, key)
-
 async def update_db_silent(user_id, lat, lon):
     """
-    تحديث الموقع في Supabase بسرعة وبدون حجز موارد البوت
+    تحديث الموقع باستخدام رابط DB_URL الحالي بدون تعطيل البوت
     """
+    conn = None
     try:
-        # التحديث المباشر عبر API Supabase (أسرع وأخف من SQL التقليدي)
-        # لا نحتاج لفتح وإغلاق اتصال، العميل يدير ذلك داخلياً
-        supabase.table("users").update({
-            "lat": lat,
-            "lon": lon,
-            "last_location_update": "now()" # أو استخدم datetime.now()
-        }).eq("user_id", user_id).execute()
-        
+        # استخدام الاتصال المباشر برابطك الحالي
+        conn = psycopg2.connect(DB_URL)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
+                (lat, lon, user_id)
+            )
+            conn.commit()
     except Exception as e:
-        print(f"❌ خطأ Supabase في الخلفية: {e}")
+        # استخدام السجل لطباعة الخطأ دون تعطيل البرنامج
+        logger.error(f"❌ خطأ في تحديث الموقع الخلفي: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def get_chat_partner(user_id, context=None):
     """جلب معرف الطرف الآخر من قاعدة البيانات مباشرة"""
