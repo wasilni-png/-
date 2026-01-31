@@ -434,14 +434,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. جلب بيانات المستخدم من الكاش
     user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
     
-    has_phone = False
-    if user:
-        phone = str(user.get('phone', ''))
-        if phone and phone not in ['0000000000', 'None', '']:
-            has_phone = True
+    # نعتبر المستخدم مسجل إذا كان موجوداً في القاعدة (حتى لو برقم 0000)
+    is_registered = True if user else False
 
-    # 3. معالجة الدخول بدون روابط عميقة (Start عادي)
-    if not context.args and has_phone:
+    # 3. معالجة الدخول العادي (مستخدم مسجل سابقاً)
+    if not context.args and is_registered:
         await update.message.reply_text(
             f"👋 مرحباً بك مجدداً يا {user['name']}", 
             reply_markup=get_main_kb(user['role'], user['is_verified'])
@@ -456,23 +453,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg_value.startswith("order_"):
             target_id = arg_value.replace("order_", "")
 
-            # أ) المستخدم غير مسجل
-            if not has_phone:
-                context.user_data['state'] = 'WAIT_RIDER_PHONE'
-                context.user_data['temp_name'] = first_name
-                context.user_data['pending_order_driver'] = target_id 
-                
-                await update.message.reply_text(
-                    f"👋 أهلاً بك يا {first_name}!\n\n"
-                    "لإتمام طلبك، نحتاج لتوثيق حسابك.\n"
-                    "✏️ **يرجى كتابة رقم جوالك الآن** (مثال: 05xxxxxxx):",
-                    reply_markup=ReplyKeyboardRemove(),
-                    parse_mode=ParseMode.MARKDOWN
+            # أ) إذا كان المستخدم جديد تماماً -> نسجله راكب تلقائياً أولاً
+            if not is_registered:
+                # استدعاء دالة التسجيل التلقائي مباشرة
+                await complete_registration(
+                    update=update, 
+                    context=context, 
+                    name=first_name, 
+                    phone="0000000000", 
+                    plate="غير محدد للركاب"
                 )
-                return
+                # ملاحظة: سنكمل المسار بعد التسجيل في الأسفل
 
-            # ب) المستخدم مسجل -> تحديد نص الرسالة بناءً على نوع الطلب
-            # ✅ تم توحيد اسم المتغير هنا إلى msg_text (حروف صغيرة) لمنع الـ Crash
+            # ب) توجيه المستخدم لطلب الرحلة
             if target_id == "general":
                 context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
                 msg_text = "🌍 **إلى أين وجهتك؟**"
@@ -482,13 +475,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg_text = "📝 **اكتب تفاصيل مشوارك الآن** لإرسالها للكابتن:"
 
             await update.message.reply_text(
-                f"✅ مرحباً بك مجدداً يا {first_name}\n\n{msg_text}",
+                f"✅ مرحباً بك يا {first_name}\n\n{msg_text}",
                 reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ إلغاء الطلب")]], resize_keyboard=True),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
 
-        # --- حالات التسجيل ---
+        # --- حالة تسجيل كابتن ---
         elif arg_value in ["driver_reg", "reg_driver"]:
             context.user_data['state'] = 'WAIT_NAME'
             context.user_data['reg_role'] = 'driver'
@@ -499,19 +492,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
             
+        # --- حالة تسجيل راكب (تلقائي) ---
         elif arg_value == "reg_rider":
-            context.user_data['state'] = 'WAIT_RIDER_PHONE'
-            context.user_data['temp_name'] = first_name
-            await update.message.reply_text(
-                f"🎉 حياك الله يا {first_name}!\nللتسجيل، يرجى **كتابة رقم جوالك**:",
-                reply_markup=ReplyKeyboardRemove(),
-                parse_mode=ParseMode.MARKDOWN
+            await complete_registration(
+                update=update, 
+                context=context, 
+                name=first_name, 
+                phone="0000000000", 
+                plate="غير محدد للركاب"
             )
             return
 
-    # 5. إذا وصل الكود هنا ولم ينفذ أي Return (مستخدم جديد بدون رابط)
+    # 5. مستخدم جديد بدون روابط عميقة (إظهار الخيارات)
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 تسجيل كراكب", callback_data="reg_rider"),
+        [InlineKeyboardButton("👤 تسجيل كراكب (سريع)", callback_data="reg_rider"),
          InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
     ])
     await update.message.reply_text(
@@ -747,17 +741,22 @@ async def complete_registration(update, context, name, phone=None, plate=None):
     chat_id = update.effective_chat.id
     username = f"@{user.username}" if user.username else "لا يوجد معرف"
     
-    # جلب الدور وحفظه في متغير محلي قبل مسح البيانات
+    # 1. جلب الدور وحفظه في متغير محلي
     role = context.user_data.get('reg_role', 'rider') 
-    phone = phone if phone else context.user_data.get('reg_phone', '0000000000')
-    plate = plate if plate else context.user_data.get('reg_plate', 'غير محدد')
+    
+    # 2. تعيين القيم الافتراضية (الرقم 0000 للراكب، أو البيانات المدخلة للكابتن)
+    final_phone = phone if phone else context.user_data.get('reg_phone', '0000000000')
+    final_plate = plate if plate else context.user_data.get('reg_plate', 'غير محدد')
 
     conn = get_db_connection()
-    if not conn: return
+    if not conn:
+        return
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # الراكب مفعل تلقائياً، الكابتن يحتاج مراجعة الإدارة
             is_verified = (role == 'rider')
+            
             cur.execute("""
                 INSERT INTO users (user_id, chat_id, role, name, phone, plate_number, is_verified)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -768,36 +767,31 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                     role = EXCLUDED.role,
                     is_verified = EXCLUDED.is_verified
                 RETURNING *;
-            """, (user_id, chat_id, role, name, phone, plate, is_verified))
+            """, (user_id, chat_id, role, name, final_phone, final_plate, is_verified))
             conn.commit()
             
+        # تحديث الكاش ليعمل البوت بالبيانات الجديدة فوراً
         await sync_all_users()
-        # انقلنا المسح إلى ما بعد إتمام الفحوصات لضمان عدم فقدان البيانات
         
+        # --- مسار الكابتن (مراجعة إدارية) ---
         if role == 'driver':
             support_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💬 مراسلة الإدارة", callback_data="contact_admin_start")],
                 [InlineKeyboardButton("👤 الحساب المباشر", url="https://t.me/x3FreTx")]
             ])
             
-            # استخدام HTML بدلاً من Markdown لضمان عدم تعطل الإرسال بسبب الرموز
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     f"✅ <b>أبشرك تم استلام طلبك يا كابتن {name}</b>\n\n"
-                    f"🚗 <b>بيانات السيارة:</b> {plate}\n"
+                    f"🚗 <b>بيانات السيارة:</b> {final_plate}\n"
                     "حسابك الحين تحت المراجعة، وأول ما يتفعل بيجيك إشعار. خلك قريب!"
                 ),
                 reply_markup=support_kb,
                 parse_mode="HTML"
             )
 
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="📋 قائمة التحكم الخاصة بك:",
-                reply_markup=get_main_kb('driver', False)
-            )
-
+            # إرسال إشعار للمشرفين لاتخاذ قرار القبول/الرفض
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ قبول", callback_data=f"verify_ok_{user_id}"),
                  InlineKeyboardButton("❌ رفض", callback_data=f"verify_no_{user_id}")]
@@ -807,8 +801,8 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                 f"🔔 <b>تسجيل كابتن جديد للمراجعة</b>\n"
                 f"─────────────────\n"
                 f"👤 <b>الاسم:</b> {name}\n"
-                f"📱 <b>الجوال:</b> <code>{phone}</code>\n"
-                f"🔢 <b>اللوحة:</b> <code>{plate}</code>\n"
+                f"📱 <b>الجوال:</b> <code>{final_phone}</code>\n"
+                f"🔢 <b>اللوحة:</b> <code>{final_plate}</code>\n"
                 f"🆔 <b>المعرف:</b> {username}\n"
                 f"🔗 <b>رابط الحساب:</b> <a href='tg://user?id={user_id}'>اضغط هنا</a>\n"
                 f"📄 <b>ID العمل:</b> <code>{user_id}</code>"
@@ -825,6 +819,7 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                 except Exception as e:
                     print(f"Error sending to admin {aid}: {e}")
         
+        # --- مسار الراكب (تفعيل فوري) ---
         else:
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -833,15 +828,15 @@ async def complete_registration(update, context, name, phone=None, plate=None):
                 parse_mode="HTML"
             )
 
-        # مسح البيانات المؤقتة في نهاية العملية تماماً
+        # 3. مسح البيانات المؤقتة لضمان نظافة الجلسة القادمة
         context.user_data.clear()
 
     except Exception as e:
         print(f"Error registration: {e}")
         await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
     finally:
-        if conn: conn.close()
-
+        if conn:
+            conn.close()
 
 # --- طلب الرحلات ---
 async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1983,19 +1978,29 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- [3] قسم التسجيل (الذي كان لديك) ---
     elif data in ["reg_rider", "reg_driver"]:
-        user = query.from_user # التأكد من تعريف user
+        user = query.from_user 
         role = "rider" if data == "reg_rider" else "driver"
         context.user_data['reg_role'] = role
         
         if role == "rider":
-            context.user_data['state'] = 'WAIT_RIDER_PHONE'
-            await query.edit_message_text(
-                text=f"🎉 **أهلاً بك يا {user.first_name}**\n\nمن فضلك أرسل **رقم جوالك** الآن بكتابته في الشات (مثال: 050xxxxxxx):",
-                parse_mode=ParseMode.MARKDOWN
+            # حذف رسالة "اختر نوع الحساب" قبل البدء بالتسجيل التلقائي
+            await query.message.delete()
+            
+            # استدعاء دالة الإكمال مباشرة ببيانات تلجرام ورقم افتراضي
+            await complete_registration(
+                update=update, 
+                context=context, 
+                name=user.full_name,      # الاسم الكامل من تلجرام
+                phone="0000000000",       # رقم افتراضي
+                plate="غير محدد للركاب"    # لوحة افتراضية
             )
         else:
+            # السائق يكمل المسار الطبيعي
             context.user_data['state'] = 'WAIT_NAME'
-            await query.edit_message_text(text="📝 يرجى كتابة **اسمك الثلاثي** الآن:", parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(
+                text="📝 مرحباً بك يا كابتن، يرجى كتابة **اسمك الثلاثي** الآن للبدء:", 
+                parse_mode="HTML"
+            )
 
     elif data == "driver_home" or data == "main_menu":
         user_id = update.effective_user.id
@@ -2845,17 +2850,30 @@ async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ==============================================================================
 # 1. دالة الإرسال التلقائي (تعمل كل 30 دقيقة)
 # ==============================================================================
+# قائمة بالقروبات المسموح لها باستقبال الإعلانات (ضع الـ IDs الخاصة بقروباتك هنا)
+ALLOWED_GROUPS = [-1001671410526, -100987654321]
+
 async def send_periodic_advertisement(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
+    chat_id = job.chat_id
     
+    # 1. التحقق مما إذا كان القروب الحالي ضمن القائمة المسموح بها
+    if chat_id not in ALLOWED_GROUPS:
+        # اختياري: إيقاف المهمة لهذا القروب إذا لم يكن مسموحاً له
+        job.schedule_removal()
+        print(f"🚫 تم إيقاف الإرسال التلقائي للدردشة {chat_id} لأنها غير مدرجة في القائمة.")
+        return
+
+    # 2. إعداد لوحة المفاتيح
     welcome_kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📍 اطلب أقرب كابتن بالمدينة (GPS) 📍", url=f"https://t.me/{context.bot.username}?start=order_general")],
         [InlineKeyboardButton("🚕 تسجيل كابتن جديد", url=f"https://t.me/{context.bot.username}?start=driver_reg")]
     ])
     
+    # 3. محاولة إرسال الرسالة
     try:
         await context.bot.send_message(
-            chat_id=job.chat_id,
+            chat_id=chat_id,
             text=(
                 "📢 **تذكير تلقائي:**\n\n"
                 "✨ **خدمة توصيل المدينة المنورة** ✨\n"
@@ -2866,8 +2884,9 @@ async def send_periodic_advertisement(context: ContextTypes.DEFAULT_TYPE):
             reply_markup=welcome_kb,
             parse_mode="Markdown"
         )
+        print(f"✅ تم إرسال التذكير الدوري للمجموعة: {chat_id}")
     except Exception as e:
-        print(f"⚠️ فشل الإرسال التلقائي للمجموعة {job.chat_id}: {e}")
+        print(f"⚠️ فشل الإرسال التلقائي للمجموعة {chat_id}: {e}")
 
 # ==============================================================================
 # 2. الدالة الرئيسية: مراقب الجروب الذكي (Scanner)
