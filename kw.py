@@ -3519,7 +3519,11 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^لوحة التحكم$") & filters.User(ADMIN_IDS), admin_panel_view), group=0)
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
-    application.add_handler(CommandHandler("picsend", admin_pic_send), group=0)
+    application.add_handler(
+    MessageHandler(filters.PHOTO & filters.CaptionContains(["/picsend"]), admin_pic_send), 
+    group=0
+)
+
 
     
     # 1. كأمر مباشر /make_delivery
