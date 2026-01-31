@@ -3520,9 +3520,10 @@ def main():
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
     application.add_handler(
-    MessageHandler(filters.PHOTO & filters.CaptionContains(["/picsend"]), admin_pic_send), 
+    MessageHandler(filters.PHOTO & filters.Caption(["/picsend"]), admin_pic_send), 
     group=0
 )
+
 
 
     
