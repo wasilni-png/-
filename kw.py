@@ -58,7 +58,7 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8204876736:AAFJCoOjeEp8iFfSvTlFcRaNjO6sBcNZszc"
+BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
 ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
