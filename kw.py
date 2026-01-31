@@ -3392,64 +3392,60 @@ async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. التحقق من أن المستخدم آدمن
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هذا الأمر مخصص للمسؤولين فقط.")
         return
 
-    # 2. التحقق من وجود صورة في الرسالة
-    if not update.message.photo:
-        await update.message.reply_text("💡 **طريقة الاستخدام:**\nأرسل صورة وضع في الوصف (Caption) الأمر `/picsend` متبوعاً بالنص الذي تريده.")
+    # 2. التحقق مما إذا كان المستخدم قام بعمل ريبلي (Reply)
+    if not update.message.reply_to_message:
+        await update.message.reply_text("💡 **طريقة الاستخدام:**\nقم بالرد (Reply) على الصورة أو الرسالة التي تريد تعميمها واكتب `/picsend`.")
         return
 
-    # 3. استخراج معرف الصورة والنص
-    photo_file_id = update.message.photo[-1].file_id
-    raw_caption = update.message.caption if update.message.caption else ""
-    # تنظيف النص من كلمة الأمر
-    final_text = raw_caption.replace("/picsend", "").strip()
+    replied_msg = update.message.reply_to_message
+    
+    # 3. تحديد نوع المحتوى المردود عليه (صورة أو نص)
+    photo_file_id = replied_msg.photo[-1].file_id if replied_msg.photo else None
+    # النص المردود عليه (سواء كان شرح صورة أو رسالة نصية)
+    final_text = replied_msg.caption if replied_msg.photo else replied_msg.text
 
-    # 4. جلب معرفات السائقين من قاعدة البيانات مباشرة
+    # 4. جلب معرفات السائقين من قاعدة البيانات
     drivers_to_send = []
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cur:
-                # جلب كل المستخدمين الذين دورهم سائق
                 cur.execute("SELECT user_id FROM users WHERE role = %s", (UserRole.DRIVER.value,))
-                rows = cur.fetchall()
-                drivers_to_send = [row[0] for row in rows]
+                drivers_to_send = [row[0] for row in cur.fetchall()]
         except Exception as e:
-            logger.error(f"Error fetching drivers for picsend: {e}")
+            logger.error(f"Error fetching drivers: {e}")
         finally:
             conn.close()
 
     if not drivers_to_send:
-        await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين في قاعدة البيانات.")
+        await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين.")
         return
 
-    status_msg = await update.message.reply_text(f"⏳ جاري الإرسال الجماعي إلى {len(drivers_to_send)} كابتن...")
+    status_msg = await update.message.reply_text(f"⏳ جاري تعميم الرسالة إلى {len(drivers_to_send)} كابتن...")
 
     success = 0
     failed = 0
 
-    # 5. حلقة الإرسال مع معالجة الأخطاء (لتجنب توقف البوت إذا حظر أحدهم البوت)
+    # 5. حلقة الإرسال
     for d_id in drivers_to_send:
         try:
-            await context.bot.send_photo(
-                chat_id=d_id,
-                photo=photo_file_id,
-                caption=final_text,
-                parse_mode="Markdown"
-            )
+            if photo_file_id:
+                await context.bot.send_photo(chat_id=d_id, photo=photo_file_id, caption=final_text, parse_mode="Markdown")
+            else:
+                await context.bot.send_message(chat_id=d_id, text=final_text, parse_mode="Markdown")
             success += 1
-            # تأخير بسيط جداً لمنع الـ Flood من تليجرام عند الإرسال لعدد كبير
-            await asyncio.sleep(0.05) 
+            await asyncio.sleep(0.05)
         except Exception:
             failed += 1
 
     await status_msg.edit_text(
-        f"✅ **اكتمل الإرسال الجماعي للكباتن**\n\n"
+        f"✅ **اكتمل الإرسال الجماعي بنظام الرد**\n\n"
         f"🟢 تم بنجاح: {success}\n"
-        f"🔴 فشل (بوت محظور): {failed}"
+        f"🔴 فشل: {failed}"
     )
+
 
 
 # ------------------------------------------------------------------
@@ -3518,10 +3514,9 @@ def main():
     application.add_handler(CommandHandler("send_drivers", broadcast_to_drivers), group=0)
     application.add_handler(CommandHandler("send_riders", broadcast_to_riders), group=0)
     
-    # بدلاً من السطر القديم، استخدم هذا السطر بدقة:
-    application.add_handler(
-    MessageHandler(filters.PHOTO & filters.CaptionContains(["/picsend"]), admin_pic_send)
-)
+# أضف هذا السطر في دالة main
+    application.add_handler(CommandHandler("picsend", admin_pic_send))
+
 
 
 
