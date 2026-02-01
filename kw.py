@@ -1658,13 +1658,20 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
-            keyboard = []
-            for info in sent_info[:10]:
-                d_id = info['chat_id']
-                driver_data = USER_CACHE.get(d_id) or {}
-                driver_name = driver_data.get('name', 'كابتن متوفر')
-                button = [InlineKeyboardButton(text=f"🚕 {driver_name}", callback_data="none")]
-                keyboard.append(button)
+    keyboard = []
+    for info in sent_info[:10]:
+        d_id = info['chat_id']
+        driver_data = USER_CACHE.get(d_id) or {}
+        
+        # استخراج الاسم أو وضع اسم افتراضي
+        driver_name = driver_data.get('name', 'كابتن متوفر')
+        
+        # تعديل نص الزر ليشمل الاسم والمعرف
+        # استخدمنا d_id لأنه هو المعرف الفعلي للسائق في هذه الحلقة
+        button_text = f"🚕 {driver_name} | ({d_id})"
+        
+        button = [InlineKeyboardButton(text=button_text, callback_data="none")]
+        keyboard.append(button)
 
             final_text = (
                 f"✅ **تم تعميم طلبك بنجاح!**\n\n"
@@ -2293,13 +2300,14 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # 7️⃣ إشعار الإدارة (الإرسال لجميع الإداريين)
             admin_msg = (
-                "🚨 **رحلة نشطة حالياً**\n\n"
-                f"🚕 **السائق:** {d_name}\n"
-                f"👤 **الراكب:** {r_name}\n"
-                f"💵 **السعر:** {price}\n\n"
-                f"📱 [مراسلة السائق](tg://user?id={driver_id})\n"
-                f"📱 [مراسلة الراكب](tg://user?id={rider_id})"
-            )
+    "🚨 **رحلة نشطة حالياً**\n\n"
+    f"🚕 **السائق:** {d_name} | `{driver_id}`\n"
+    f"👤 **الراكب:** {r_name} | `{rider_id}`\n"
+    f"💵 **السعر:** {price}\n\n"
+    f"📱 [مراسلة السائق](tg://user?id={driver_id})\n"
+    f"📱 [مراسلة الراكب](tg://user?id={rider_id})"
+)
+
 
             for admin_id in ADMIN_IDS:
                 try:
