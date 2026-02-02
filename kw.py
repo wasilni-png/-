@@ -65,7 +65,7 @@ ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # --- 1. إعدادات الأحياء الذكية (المدينة المنورة) ---
 from config import get_db_connection, normalize_text, CITIES_DISTRICTS, BOT_TOKEN
-from scraper import user_app
+from app import user_app
 
 
 LAST_REPLY_TIME = {}
