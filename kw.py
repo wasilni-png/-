@@ -1522,7 +1522,7 @@ async def admin_panel_view(update, context):
 
         keyboard = [
         [
-            InlineKeyboardButton("🔍 بحث بالمعرف", callback_data="admin_search_id"),
+            InlineKeyboardButton("?? بحث بالمعرف", callback_data="admin_search_id"),
             InlineKeyboardButton("🗑️ حذف عضو", callback_data="admin_delete_user_start")
         ],
         [
@@ -1618,8 +1618,18 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 d_id = info['chat_id']
                 driver_data = USER_CACHE.get(d_id) or {}
                 driver_name = driver_data.get('name', 'كابتن متوفر')
-                button = [InlineKeyboardButton(text=f"🚕 {driver_name}", callback_data="none")]
+                
+                # جلب يوزر نيم السائق إذا وجد، أو استخدام رابط الـ ID المباشر
+                driver_username = driver_data.get('username')
+                if driver_username:
+                    driver_url = f"https://t.me/{driver_username}"
+                else:
+                    driver_url = f"tg://user?id={d_id}"
+                
+                # تعديل الزر لاستخدام url بدلاً من callback_data للتحويل المباشر
+                button = [InlineKeyboardButton(text=f"🚕 {driver_name}", url=driver_url)]
                 keyboard.append(button)
+
 
             final_text = (
                 f"✅ **تم تعميم طلبك بنجاح!**\n\n"
