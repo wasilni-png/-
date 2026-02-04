@@ -541,25 +541,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
 async def get_drivers_list_by_district(district_name):
-    """جلب بيانات وأسماء السائقين في حي معين"""
+    """جلب بيانات وأسماء السائقين المتاحين (غير المشغولين برحلة) في حي معين"""
     conn = get_db_connection()
     if not conn: return [], ""
     
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # التعديل: إضافة شرط للتأكد أن السائق ليس لديه دردشة نشطة في جدول active_chats
             query = """
                 SELECT name, chat_id, user_id 
                 FROM users 
                 WHERE role = 'driver' 
                 AND is_verified = true 
                 AND districts ILIKE %s
+                AND user_id NOT IN (SELECT user_id FROM active_chats)
             """
             cur.execute(query, (f"%{district_name}%",))
             drivers = cur.fetchall()
             
+            if not drivers:
+                return [], "لا يوجد سائقين متاحين حالياً في هذا الحي."
+
             # تجهيز نص بأسماء السائقين للعرض
             names_text = "\n".join([f"- {d['name'] or 'كابتن بدون اسم'}" for d in drivers])
             return drivers, names_text
+            
     except Exception as e:
         print(f"❌ Error fetching drivers: {e}")
         return [], ""
@@ -1057,79 +1063,68 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip() if update.message.text else ""
     state = context.user_data.get('state')
 
-    # --- 🟢 الحل هنا: تعريف user_role قبل استخدامه 🟢 ---
-    user_info = USER_CACHE.get(str(user_id)) or {}
-    user_role = user_info.get('role', 'rider') # إذا لم يوجد، نفترض أنه راكب
-    
-    # تعريف الأزرار أيضاً لتجنب خطأ مشابه
+    # --- 🟢 تحسين جلب الرتبة لضمان العزل 🟢 ---
+    # نحاول جلب البيانات بكل الوسائل (نص أو رقم)
+    user_info = USER_CACHE.get(str(user_id)) or USER_CACHE.get(user_id) or {}
+    user_role = user_info.get('role') # لا نضع قيمة افتراضية هنا لنعرف الحقيقة
+
+    # تعريف الأزرار
     main_buttons = ["🚖 طلب رحلة", "📞 تواصل مع الإدارة", "💰 محفظتي", "🔙 العودة للقائمة الرئيسية"]
 
+    # --- 3. معالجة زر العودة والقائمة الرئيسية ---
     if text == "🔙 العودة للقائمة الرئيسية":
-        # 1. تصفير الحالة (State) لضمان الخروج من أي عمليات معلقة
         context.user_data['state'] = None
-    
-        # 2. جلب حالة التوثيق فقط (لأنها مهمة لشكل أزرار السائق)
-        user_data = USER_CACHE.get(user_id) or {}
-        is_verified = user_data.get('is_verified', True)
-
-        # 3. إرسال القائمة الرئيسية مع تحديد الرتبة "driver" يدوياً
+        is_verified = user_info.get('is_verified', True)
         await update.message.reply_text(
-            "🏠 تم الرجوع لقائمة الكابتن.",
-            reply_markup=get_main_kb('driver', is_verified) # قمنا بتغيير role إلى 'driver' هنا
+            "🏠 تم الرجوع للقائمة الرئيسية.",
+            reply_markup=get_main_kb(user_role, is_verified)
         )
         return
         
     if state == 'WAIT_ADMIN_MESSAGE':
         if text == "❌ إلغاء المراسلة":
             context.user_data['state'] = None
-            
-            # جلب البيانات من الكاش (المرتبط بقاعدة البيانات)
-            user_info = USER_CACHE.get(user_id, {})
-            
-            # جلب القيم الحقيقية
-            # هنا البوت سيأخذ الـ role والـ is_verified كما هي في السوبابيس (Supabase)
-            role = user_info.get('role') 
-            verified_status = user_info.get('is_verified')
-
+            role = user_info.get('role', 'rider')
+            verified_status = user_info.get('is_verified', False)
             await update.message.reply_text(
                 "تم الإلغاء.", 
                 reply_markup=get_main_kb(role, verified_status)
             )
             return
 
-                # ---------------------------------------------------------
-    # 🚕 [نظام عرض السائقين - المحدث لمنع التداخل]
-    # ---------------------------------------------------------
-    
-    # 1. إذا كان المستخدم سائقاً، اخرج فوراً ولا تقرأ رسائله كأحياء
-    if user_role == 'driver':
-        return
-
-    # 2. التحقق: هل الراكب في دردشة نشطة حالياً؟
-    is_in_chat = False
+    # --- 4. نظام الدردشة النشطة (Chat Relay) ---
+    # يجب أن يكون قبل نظام الأحياء لضمان وصول الرسائل للطرفين
     conn = get_db_connection()
     if conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM active_chats WHERE user_id = %s", (user_id,))
-            is_in_chat = cur.fetchone() is not None
-        conn.close()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
+                row = cur.fetchone()
+                if row:
+                    partner_id = row[0]
+                    # هنا نمرر الرسالة للطرف الآخر
+                    await context.bot.send_message(chat_id=partner_id, text=text)
+                    return # نخرج فوراً (لا نريد قراءة الحي أثناء الدردشة)
+        finally:
+            conn.close()
 
-    # 3. معالجة الرسالة للراكب فقط (بشرط عدم وجود حالة أو دردشة أو ضغط زر رئيسي)
-    if user_role == 'rider' and not state and not is_in_chat and text not in main_buttons:
-        
+    # --- 5. العزل الحقيقي للسائق ---
+    # إذا كان المستخدم سائقاً، يتوقف الكود هنا تماماً عن معالجة "الأحياء"
+    if user_role == 'driver':
+        # إذا كنت تريد معالجة أوامر خاصة بالسائق غير الدردشة ضعها هنا
+        return 
+
+    # --- 6. نظام عرض السائقين (للركاب فقط) ---
+    if user_role == 'rider' and not state and text not in main_buttons:
         matched_district = extract_district_from_text(text)
         
-        # إذا وجدنا حياً في نص الراكب
         if matched_district:
             drivers, drivers_names = await get_drivers_list_by_district(matched_district)
             
             if drivers:
-                # إرسال الطلب للسائقين في الخلفية
                 await send_order_to_drivers(drivers, text, user, context)
                 
-          
-
-                # 4. إنشاء أزرار بأسماء السائقين المتوفرين
+                                # 4. إنشاء أزرار بأسماء السائقين المتوفرين
                 keyboard_buttons = []
                 for d in drivers:
                     # الزر يوجه لملف السائق الشخصي (اختياري) أو مجرد زر اسم
@@ -1164,7 +1159,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
 
-    # ---------------------------------------------------------
+      # ---------------------------------------------------------
     # [الفلتر الأول] المحادثات النشطة (Chat Relay)
     # ---------------------------------------------------------
     # إذا كان المستخدم يتحدث حالياً مع طرف آخر (كابتن/راكب)، اخرج فوراً
@@ -2429,16 +2424,18 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 6️⃣ إرسال الإشعارات للطرفين
             await query.edit_message_text(f"✅ تم قبول المشوار!\n💬 الدردشة مفتوحة مع: {r_name}")
             
-                        # --- رسالة السائق ---
+            # --- رسالة السائق ---
             await context.bot.send_message(
                 chat_id=driver_id,
                 text=(
-                    "✅ **تم قبول الطلب بنجاح!**\n\n"
+                    f"✅ **تم قبول الطلب بنجاح!**\n"
+                    f"💬 **العميل:** {r_name}\n\n"
                     "🔓 **فتحت الدردشة الآمنة:**\n"
-                    "أي رسالة تكتبها هنا الآن ستصل للراكب مباشرة.\n"
-                    "🛡️ _خصوصيتك محفوظة، لا داعي لمشاركة رقمك._"
+                    "أي رسالة تكتبها هنا ستصل للراكب مباشرة.\n\n"
+                    "🏁 **ملاحظة هامة:**\n"
+                    "عند اكتمال المشوار، يرجى الضغط على زر **(إنهاء الرحلة)** لإغلاق الدردشة وحفظ خصوصيتك."
                 ),
-                reply_markup=chat_kb,
+                reply_markup=chat_kb, # تأكد أن chat_kb يحتوي على زر "🏁 إنهاء الرحلة"
                 parse_mode="Markdown"
             )
 
@@ -2450,15 +2447,15 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"🎉 **أبشر! الكابتن {d_name} وافق على مشوارك.**\n\n"
                         f"💰 **السعر:** {price if price != 'غير_محدد' else 'حسب الاتفاق'}\n"
                         f"🤝 **بدأت الدردشة الآمنة:**\n"
-                        f"تحدث مع الكابتن مباشرة عبر هذه الشاشة بخصوص الموقع أو التفاصيل.\n\n"
-                        f"🔒 _لحمايتك، تواصل مع الكابتن داخل البوت فقط._"
+                        "تواصل مع الكابتن هنا بخصوص الموقع والتفاصيل.\n\n"
+                        "🛑 **تنبيه:**\n"
+                        "بمجرد وصولك، تأكد من ضغط زر **(إنهاء الرحلة)** لإغلاق الدردشة نهائياً لضمان أمان بياناتك."
                     ),
                     reply_markup=chat_kb,
                     parse_mode="Markdown"
                 )
             except Exception as e:
                 print(f"Error sending msg to rider: {e}")
-
 
             # 7️⃣ إشعار الإدارة (الإرسال لجميع الإداريين)
             admin_msg = (
