@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
 import threading
 import asyncio
 import time
