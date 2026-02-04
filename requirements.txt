@@ -3,5 +3,4 @@ psycopg2-binary
 flask
 geopy
 httpx
-pyrogram
 tgcrypto
