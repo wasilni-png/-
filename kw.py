@@ -1068,8 +1068,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_info = USER_CACHE.get(str(user_id)) or USER_CACHE.get(user_id) or {}
     user_role = user_info.get('role') # لا نضع قيمة افتراضية هنا لنعرف الحقيقة
 
-    # تعريف الأزرار
-    main_buttons = ["🚖 طلب رحلة", "📞 تواصل مع الإدارة", "💰 محفظتي", "🔙 العودة للقائمة الرئيسية"]
+
 
     # --- 3. معالجة زر العودة والقائمة الرئيسية ---
     if text == "🔙 العودة للقائمة الرئيسية":
