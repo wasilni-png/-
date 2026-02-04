@@ -15,7 +15,7 @@ from enum import Enum
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
-
+from psycopg2 import pool
 # مكتبات Flask والويب
 from flask import Flask
 
@@ -37,7 +37,7 @@ from telegram.ext import ApplicationHandlerStop
 from telegram.request import HTTPXRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import MessageHandler, filters, ContextTypes, ChatMemberHandler
-
+from psycopg2 import pool
 # إعداد السيرفر لـ Render
 app = Flask('')
 
@@ -87,14 +87,32 @@ CITIES_DISTRICTS = {
 }
 
 
+# إنشاء مجمع اتصالات عالمي (يفتح 1 إلى 20 اتصالاً ويبقيها جاهزة)
+try:
+    db_pool = psycopg2.pool.ThreadedConnectionPool(
+        1, 20, DB_URL
+    )
+    print("✅ تم تفعيل مجمع اتصالات قاعدة البيانات (Connection Pool)")
+except Exception as e:
+    print(f"❌ فشل إنشاء مجمع الاتصالات: {e}")
+    db_pool = None
+
 def get_db_connection():
+    """سحب اتصال جاهز من المجمع (سريع جداً)"""
     try:
-        conn = psycopg2.connect(DB_URL)
-        return conn
+        if db_pool:
+            return db_pool.getconn()
+        return psycopg2.connect(DB_URL)
     except Exception as e:
-        print(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
+        print(f"❌ فشل جلب اتصال: {e}")
         return None
 
+def release_db_connection(conn):
+    """إعادة الاتصال للمجمع بدلاً من إغلاقه"""
+    if db_pool and conn:
+        db_pool.putconn(conn)
+    elif conn:
+        conn.close()
 
 def normalize_text(text):
     if not text: return ""
@@ -236,24 +254,33 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
 
 async def update_db_silent(user_id, lat, lon):
     """
-    تحديث الموقع باستخدام رابط DB_URL الحالي بدون تعطيل البوت
+    تحديث الموقع باستخدام الـ Pool لضمان السرعة القصوى وعدم ثقل البوت
     """
-    conn = None
+    # 1. سحب اتصال جاهز من المجمع (أسرع بـ 10 أضعاف من فتح اتصال جديد)
+    conn = get_db_connection()
+    if not conn:
+        return
+
     try:
-        # استخدام الاتصال المباشر برابطك الحالي
-        conn = psycopg2.connect(DB_URL)
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
-                (lat, lon, user_id)
-            )
-            conn.commit()
+        # 2. تشغيل التنفيذ في مسار (Thread) منفصل لكي لا يتوقف البوت نهائياً
+        def db_task():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
+                    (lat, lon, user_id)
+                )
+                conn.commit()
+        
+        await asyncio.to_thread(db_task)
+        
     except Exception as e:
-        # استخدام السجل لطباعة الخطأ دون تعطيل البرنامج
         logger.error(f"❌ خطأ في تحديث الموقع الخلفي: {e}")
     finally:
+        # 3. ⚠️ أهم خطوة: إعادة الاتصال للمجمع بدلاً من إغلاقه (Close)
+        # استخدم الدالة التي أنشأناها سابقاً لإعادة الاتصال للـ Pool
         if conn:
-            conn.close()
+            release_db_connection(conn) 
+
 
 def get_chat_partner(user_id, context=None):
     """جلب معرف الطرف الآخر من قاعدة البيانات مباشرة"""
@@ -541,70 +568,84 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
 async def get_drivers_list_by_district(district_name):
-    """جلب بيانات وأسماء السائقين المتاحين (غير المشغولين برحلة) في حي معين"""
+    """جلب بيانات وأسماء السائقين المتاحين (غير المشغولين) باستخدام الـ Pool لسرعة قصوى"""
     conn = get_db_connection()
     if not conn: return [], ""
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # التعديل: إضافة شرط للتأكد أن السائق ليس لديه دردشة نشطة في جدول active_chats
-            query = """
-                SELECT name, chat_id, user_id 
-                FROM users 
-                WHERE role = 'driver' 
-                AND is_verified = true 
-                AND districts ILIKE %s
-                AND user_id NOT IN (SELECT user_id FROM active_chats)
-            """
-            cur.execute(query, (f"%{district_name}%",))
-            drivers = cur.fetchall()
-            
-            if not drivers:
-                return [], "لا يوجد سائقين متاحين حالياً في هذا الحي."
+        # تشغيل الاستعلام في Thread منفصل لضمان استجابة البوت للبقية
+        def fetch_drivers():
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                query = """
+                    SELECT name, chat_id, user_id 
+                    FROM users 
+                    WHERE role = 'driver' 
+                    AND is_verified = true 
+                    AND districts ILIKE %s
+                    AND user_id NOT IN (SELECT user_id FROM active_chats)
+                """
+                cur.execute(query, (f"%{district_name}%",))
+                return cur.fetchall()
 
-            # تجهيز نص بأسماء السائقين للعرض
-            names_text = "\n".join([f"- {d['name'] or 'كابتن بدون اسم'}" for d in drivers])
-            return drivers, names_text
+        drivers = await asyncio.to_thread(fetch_drivers)
+        
+        if not drivers:
+            return [], "⚠️ لا يوجد سائقين متاحين حالياً في هذا الحي."
+
+        # تجهيز نص بأسماء السائقين للعرض
+        names_text = "\n".join([f"- {d['name'] or 'كابتن بدون اسم'}" for d in drivers])
+        return drivers, names_text
             
     except Exception as e:
         print(f"❌ Error fetching drivers: {e}")
         return [], ""
     finally:
-        conn.close()
+        # ⚠️ تغيير جوهري: إعادة الاتصال للمجمع بدلاً من التخلص منه
+        release_db_connection(conn)
+
+
+
 
 async def send_order_to_drivers(drivers, order_text, customer, context):
-    """إرسال الطلب مع قيمة افتراضية للسعر لمنع الانهيار"""
+    """إرسال الطلب لجميع السائقين دفعة واحدة لضمان السرعة القصوى"""
     district_name = extract_district_from_text(order_text) or "غير محدد"
     rider_id = customer.id
-    
-    # وضع قيمة افتراضية للسعر (0) لمنع خطأ index out of range في المعالجة
     default_price = "0" 
     
     keyboard = InlineKeyboardMarkup([
-        # أضفنا default_price في نهاية الـ callback_data
         [InlineKeyboardButton("✅ قبول الطلب", callback_data=f"accept_gen_{rider_id}_{default_price}")],
         [InlineKeyboardButton("💵 إقتراح سعر", callback_data=f"bid_req_{rider_id}")] 
     ])
 
-    for d in drivers:
-        try:
-            target_id = d.get('chat_id')
-            if not target_id: continue
+    message_content = (
+        f"🚨 **طلب مشوار جديد!**\n\n"
+        f"📍 **الحي:** {district_name}\n"
+        f"📝 **الطلب:** {order_text}\n"
+        f"👤 **العميل:** {customer.full_name}\n\n"
+        f"_يمكنك قبول الطلب مباشرة أو تقديم عرض سعر خاص بك._"
+    )
 
+    # دالة داخلية لإرسال رسالة واحدة
+    async def safe_send(driver):
+        target_id = driver.get('chat_id')
+        if not target_id: return
+        try:
             await context.bot.send_message(
                 chat_id=target_id,
-                text=(
-                    f"🚨 **طلب مشوار جديد!**\n\n"
-                    f"📍 **الحي:** {district_name}\n"
-                    f"📝 **الطلب:** {order_text}\n"
-                    f"👤 **العميل:** {customer.full_name}\n\n"
-                    f"_يمكنك قبول الطلب مباشرة أو تقديم عرض سعر خاص بك._"
-                ),
+                text=message_content,
                 reply_markup=keyboard,
                 parse_mode="Markdown"
             )
         except Exception as e:
-            print(f"⚠️ فشل الإرسال للسائق {d.get('user_id')}: {e}")
+            print(f"⚠️ فشل الإرسال للسائق {driver.get('user_id')}: {e}")
+
+    # --- 🟢 التعديل الجوهري: الإرسال المتوازي 🟢 ---
+    # إنشاء قائمة بالمهام لجميع السائقين
+    tasks = [safe_send(d) for d in drivers]
+    
+    # تنفيذ جميع المهام معاً في نفس اللحظة
+    if tasks:
+        await asyncio.gather(*tasks)
 
 # --- التسجيل ---
 # --- التسجيل المحدث ---
