@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import logging
-logging.getLogger("httpx").setLevel(logging.WARNING)
 import threading
 import asyncio
 import time
@@ -1072,14 +1071,29 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     # --- 3. معالجة زر العودة والقائمة الرئيسية ---
+        # --- 3. معالجة زر العودة والقائمة الرئيسية ---
     if text == "🔙 العودة للقائمة الرئيسية":
         context.user_data['state'] = None
-        is_verified = user_info.get('is_verified', True)
+        
+        # 1. جلب البيانات بذكاء (فحص الرقم والنص) لضمان عدم الضياع
+        u_info = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id)) or {}
+        
+        # 2. تحديد الرتبة بشكل صارم
+        u_role = u_info.get('role')
+        
+        # 3. [إجراء احترازي] إذا لم يجد الرتبة في الكاش، ابحث عنها في قاعدة البيانات
+        if not u_role:
+            u_role = get_user_role(user_id) # تأكد أن لديك دالة تجلب من DB مباشرة
+        
+        is_verified = u_info.get('is_verified', True)
+
+        # 4. إرسال القائمة الصحيحة بناءً على الرتبة المحققة
         await update.message.reply_text(
             "🏠 تم الرجوع للقائمة الرئيسية.",
-            reply_markup=get_main_kb(user_role, is_verified)
+            reply_markup=get_main_kb(u_role, is_verified)
         )
         return
+
         
     if state == 'WAIT_ADMIN_MESSAGE':
         if text == "❌ إلغاء المراسلة":
