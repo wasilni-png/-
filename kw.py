@@ -473,6 +473,27 @@ def get_main_kb(role, is_verified=True):
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
 
+async def get_user_role(user_id):
+    """جلب رتبة المستخدم مباشرة من قاعدة البيانات عند فشل الكاش"""
+    conn = get_db_connection() # استخدام الـ Pool
+    if not conn:
+        return 'rider' # القيمة الافتراضية في حال فشل الاتصال
+
+    try:
+        def query():
+            with conn.cursor() as cur:
+                cur.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+                result = cur.fetchone()
+                return result[0] if result else 'rider'
+        
+        # تنفيذ الاستعلام في Thread منفصل لعدم تجميد البوت
+        role = await asyncio.to_thread(query)
+        return role
+    except Exception as e:
+        print(f"❌ خطأ في get_user_role: {e}")
+        return 'rider'
+    finally:
+        release_db_connection(conn) # إعادة الاتصال للمجمع
 
 
 
