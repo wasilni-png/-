@@ -67,16 +67,25 @@ ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 # --- 1. إعدادات الأحياء الذكية (المدينة المنورة) ---
 CITIES_DISTRICTS = {
     "المدينة المنورة": [
-        "الإسكان", "البحر", "البدراني", "الفتح", "التلال", "الجرف", "الحزام", "الحمراء",
-        "الخالدية", "الدويخله", "الرانونا", "الربوة", "الشروق", "الشرق",
-        "العاقول", "العريض", "العزيزية", "العنابس", "القبلتين", "المبعوث",
-        "المطار", "المغيسله", "الملك فهد", "النبلاء", "الهجرة", "باقدو",
-        "بني حارثة", "حديقة الملك فهد", "سيد الشهداء", "شوران", "قباء", "مهزور",
-        "شظاة", "مستشفى الملك فهد", "مستشفى الملك سلمان", "مستشفى الولادة",
-        "مستشفى المواساة", "النور مول", "العالية مول", "القارات",
-        "العيون", "طريق الملك عبدالعزيز", "الدائري"
+        "أبو مرخة", "أبيار علي", "الأسواف", "الإمام البخاري", "الإسكان", "البحر", 
+        "البدراني", "الجمعة", "الجرف", "الحزام", "الحمراء", "الخاتم", "الخالدية", 
+        "الدائرة", "الدائري", "الدويخله", "الدويمة", "الدعيثة", "الرانونا", "الرناونة", 
+        "الربوة", "السيح", "الشروق", "الشرق", "الشهداء", "الشيبية", "الظاهرة", 
+        "العاقول", "العالية مول", "العوالي", "العريض", "العزيزية", "العصبة", 
+        "العنابس", "العنبرية", "العيون", "الفتح", "القبلتين", "القارات", "المبعوث", 
+        "المطار", "المغيسله", "الملك فهد", "الملك فيصل", "المناخة", "المصانع", 
+        "النور مول", "النبلاء", "النقيع", "النقمي", "الهجرة", "الواحة", "الوادي", 
+        "بئر الماشي", "بئر عثمان", "باقدو", "بني حارثة", "بني ظفر", "تلال علي", 
+        "جامعة طيبة", "الجامعة الإسلامية", "حديقة الملك فهد", "حمراء الأسد", 
+        "دفاع", "ذو الحليفة", "رهط", "سيد الشهداء", "سلطانة", "سكة الحديد", 
+        "السقيا", "شظاة", "شوران", "طريق الجامعات", "طريق الملك عبدالعزيز", 
+        "طريق الهجرة", "طريق ينبع", "عروة", "قباء", "قربان", "محطة قطار الحرمين", 
+        "مخطط التلال", "مستشفى الألماني", "مستشفى الحرس الوطني", "مستشفى الملك سلمان", 
+        "مستشفى الملك فهد", "مستشفى المواساة", "مستشفى الولادة", "ممشى الهجرة", 
+        "منار مول", "مهزور", "وعيرة"
     ]
 }
+
 
 def get_db_connection():
     try:
@@ -339,6 +348,20 @@ async def sync_all_users(force=False):
         conn.close()
 
 
+def extract_district_from_text(text):
+    """مطابقة نص المستخدم مع قائمة الأحياء المحددة"""
+    if not text: return None
+    
+    # توحيد الأحرف لضمان المطابقة (ة -> ه ، أ -> ا)
+    text_clean = text.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    
+    for city in CITIES_DISTRICTS:
+        for district in CITIES_DISTRICTS[city]:
+            # توحيد اسم الحي من القائمة أيضاً للمقارنة
+            dist_clean = district.replace("ة", "ه").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+            if dist_clean in text_clean:
+                return district # نعيد الاسم الأصلي كما هو في القائمة
+    return None
 
 # --- دوال الدردشة الوسيطة ---
 
@@ -517,6 +540,65 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
+async def get_drivers_list_by_district(district_name):
+    """جلب بيانات وأسماء السائقين في حي معين"""
+    conn = get_db_connection()
+    if not conn: return [], ""
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                SELECT name, chat_id, user_id 
+                FROM users 
+                WHERE role = 'driver' 
+                AND is_verified = true 
+                AND districts ILIKE %s
+            """
+            cur.execute(query, (f"%{district_name}%",))
+            drivers = cur.fetchall()
+            
+            # تجهيز نص بأسماء السائقين للعرض
+            names_text = "\n".join([f"- {d['name'] or 'كابتن بدون اسم'}" for d in drivers])
+            return drivers, names_text
+    except Exception as e:
+        print(f"❌ Error fetching drivers: {e}")
+        return [], ""
+    finally:
+        conn.close()
+
+async def send_order_to_drivers(drivers, order_text, customer, context):
+    """إرسال الطلب مع قيمة افتراضية للسعر لمنع الانهيار"""
+    district_name = extract_district_from_text(order_text) or "غير محدد"
+    rider_id = customer.id
+    
+    # وضع قيمة افتراضية للسعر (0) لمنع خطأ index out of range في المعالجة
+    default_price = "0" 
+    
+    keyboard = InlineKeyboardMarkup([
+        # أضفنا default_price في نهاية الـ callback_data
+        [InlineKeyboardButton("✅ قبول الطلب", callback_data=f"accept_gen_{rider_id}_{default_price}")],
+        [InlineKeyboardButton("💵 إقتراح سعر", callback_data=f"bid_req_{rider_id}")] 
+    ])
+
+    for d in drivers:
+        try:
+            target_id = d.get('chat_id')
+            if not target_id: continue
+
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    f"🚨 **طلب مشوار جديد!**\n\n"
+                    f"📍 **الحي:** {district_name}\n"
+                    f"📝 **الطلب:** {order_text}\n"
+                    f"👤 **العميل:** {customer.full_name}\n\n"
+                    f"_يمكنك قبول الطلب مباشرة أو تقديم عرض سعر خاص بك._"
+                ),
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            print(f"⚠️ فشل الإرسال للسائق {d.get('user_id')}: {e}")
 
 # --- التسجيل ---
 # --- التسجيل المحدث ---
@@ -965,20 +1047,22 @@ async def end_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- المعالج الشامل (Global Handler) ---
 async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. التحقق من وجود رسالة (أهم خطوة لمنع الانهيار)
+    # 1. التحقق الأساسي
     if not update.message:
         return
 
-    # 2. استخراج البيانات بأمان (تعديل جوهري هنا)
+    # 2. استخراج البيانات الأساسية
     user = update.effective_user
-    if not user: return # حماية إضافية إذا لم يستطع البوت التعرف على المستخدم
-    
     user_id = user.id
-    state = context.user_data.get('state')
-    
-    # استخراج النص مع ضمان عدم كونه None حتى لو كانت الرسالة صورة أو موقع
     text = update.message.text.strip() if update.message.text else ""
+    state = context.user_data.get('state')
 
+    # --- 🟢 الحل هنا: تعريف user_role قبل استخدامه 🟢 ---
+    user_info = USER_CACHE.get(str(user_id)) or {}
+    user_role = user_info.get('role', 'rider') # إذا لم يوجد، نفترض أنه راكب
+    
+    # تعريف الأزرار أيضاً لتجنب خطأ مشابه
+    main_buttons = ["🚖 طلب رحلة", "📞 تواصل مع الإدارة", "💰 محفظتي", "🔙 العودة للقائمة الرئيسية"]
 
     if text == "🔙 العودة للقائمة الرئيسية":
         # 1. تصفير الحالة (State) لضمان الخروج من أي عمليات معلقة
@@ -1012,6 +1096,67 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_main_kb(role, verified_status)
             )
             return
+
+            # ---------------------------------------------------------
+    # 🚕 [نظام عرض السائقين - المحدث لمنع التداخل]
+    # ---------------------------------------------------------
+    
+    # التحقق أولاً: هل المستخدم في دردشة نشطة؟
+    is_in_chat = False
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM active_chats WHERE user_id = %s", (user_id,))
+            is_in_chat = cur.fetchone() is not None
+        conn.close()
+
+    # الشرط الجديد: يجب أن يكون راكباً، ليس لديه حالة (State)، ليس في دردشة، ولم يضغط زر رئيسي
+    if user_role == 'rider' and not state and not is_in_chat and text not in main_buttons:
+        
+        matched_district = extract_district_from_text(text)
+        
+        # إذا وجدنا حياً في النص والمستخدم "حر" (ليس في دردشة أو طلب)
+        if matched_district:
+            drivers, drivers_names = await get_drivers_list_by_district(matched_district)
+            
+            if drivers:
+                # إرسال الطلبات للسائقين
+                await send_order_to_drivers(drivers, text, user, context)
+                
+
+                # 4. إنشاء أزرار بأسماء السائقين المتوفرين
+                keyboard_buttons = []
+                for d in drivers:
+                    # الزر يوجه لملف السائق الشخصي (اختياري) أو مجرد زر اسم
+                    # سنستخدم رابط تليجرام المباشر إذا كان متاحاً أو زر تنبيه
+                    driver_name = d.get('name') or "كابتن موثق"
+                    # ملاحظة: التوجيه للخاص قد يكسر الخصوصية، لذا يفضل جعل الزر للعرض فقط أو تنبيه
+                    keyboard_buttons.append([InlineKeyboardButton(f"👤 {driver_name}", callback_data="wait_accept")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard_buttons)
+
+                # 5. رسالة الرد للعميل مع الإرشادات الأمنية
+                response_msg = (
+                    f"📍 **تم تحديد الحي:** {matched_district}\n\n"
+                    f"👥 **الكباتن المتوفرين في حيك الآن:**\n"
+                    f"*(تظهر أسماؤهم في الأزرار أدناه)*\n\n"
+                    f"✅ **تم إرسال طلبك لهم جميعاً.**\n\n"
+                    f"⚠️ **تنبيه هام للخصوصية:**\n"
+                    f"يرجى انتظار قيام أحد الكباتن بضغط 'قبول'. ستفتح لك **دردشة تلقائية داخل البوت** فور قبول أحدهم. \n\n"
+                    f"🛡️ **لماذا الدردشة داخل البوت؟**\n"
+                    f"- لحماية رقم جوالك وخصوصيتك.\n"
+                    f"- لتوثيق التعامل وضمان الأمان للطرفين."
+                )
+                
+                await update.message.reply_text(
+                    response_msg, 
+                    reply_markup=reply_markup, 
+                    parse_mode="Markdown"
+                )
+                return 
+            else:
+                await update.message.reply_text(f"📍 تم تحديد حي **{matched_district}**، ولكن لا يوجد سائقين موثقين مسجلين فيه حالياً.")
+                return
 
 
     # ---------------------------------------------------------
@@ -1738,10 +1883,25 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
 
-    # محاولة إغلاق مؤشر التحميل لتجنب التعليق
-    try: await query.answer()
-    except: pass
+    # 1. معالجة زر انتظار القبول (تنبيه الخصوصية)
+    if data == "wait_accept":
+        try:
+            await query.answer(
+                text=(
+                    "⏳ جاري انتظار قبول الكابتن للطلب..\n\n"
+                    "🛡️ حفاظاً على خصوصيتك وأمانك، ستفتح دردشة مباشرة هنا داخل البوت فور القبول دون الحاجة لتبادل أرقام الجوال."
+                ),
+                show_alert=True
+            )
+        except Exception as e:
+            print(f"Alert Error: {e}")
+        return
 
+    # 2. إغلاق مؤشر التحميل لبقية الأزرار
+    try: 
+        await query.answer()
+    except: 
+        pass
     if data == "districts_settings":
         # عرض أحياء المدينة المنورة للسائق فوراً
         from_city = "المدينة المنورة"
@@ -2232,29 +2392,68 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [KeyboardButton("🏁 إنهاء المشوار والدردشة")] # تأكد من توحيد النص للإنهاء
             ], resize_keyboard=True)
 
-            # 5️⃣ جلب الأسماء
+            # 5️⃣ جلب الأسماء بشكل مؤكد
             await sync_all_users()
-            d_name = USER_CACHE.get(driver_id, {}).get('name', 'كابتن')
-            r_name = USER_CACHE.get(rider_id, {}).get('name', 'عميل')
+            
+            # محاولة جلب اسم السائق
+            driver_info = USER_CACHE.get(str(driver_id)) or USER_CACHE.get(driver_id) or {}
+            d_name = driver_info.get('name')
+            
+            # محاولة جلب اسم الراكب
+            rider_info = USER_CACHE.get(str(rider_id)) or USER_CACHE.get(rider_id) or {}
+            r_name = rider_info.get('name')
+
+            # --- التحقق الاحتياطي من قاعدة البيانات مباشرة ---
+            if not d_name or d_name == 'كابتن':
+                conn = get_db_connection()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT name FROM users WHERE user_id = %s", (driver_id,))
+                    res = cur.fetchone()
+                    d_name = res[0] if res and res[0] else query.from_user.full_name
+                conn.close()
+
+            if not r_name or r_name == 'عميل':
+                conn = get_db_connection()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT name FROM users WHERE user_id = %s", (rider_id,))
+                    res = cur.fetchone()
+                    r_name = res[0] if res and res[0] else "عميل"
+                conn.close()
+
 
             # 6️⃣ إرسال الإشعارات للطرفين
             await query.edit_message_text(f"✅ تم قبول المشوار!\n💬 الدردشة مفتوحة مع: {r_name}")
             
+                        # --- رسالة السائق ---
             await context.bot.send_message(
                 chat_id=driver_id,
-                text="🚕 **بدأت الرحلة!**\nيمكنك التواصل مع الراكب الآن.",
+                text=(
+                    "✅ **تم قبول الطلب بنجاح!**\n\n"
+                    "🔓 **فتحت الدردشة الآمنة:**\n"
+                    "أي رسالة تكتبها هنا الآن ستصل للراكب مباشرة.\n"
+                    "🛡️ _خصوصيتك محفوظة، لا داعي لمشاركة رقمك._"
+                ),
                 reply_markup=chat_kb,
                 parse_mode="Markdown"
             )
 
+            # --- رسالة العميل (الراكب) ---
             try:
                 await context.bot.send_message(
                     chat_id=rider_id,
-                    text=f"🎉 **أبشر! الكابتن {d_name} قبل طلبك.**\n💰 السعر: {price}\n\n💬 يمكنك مراسلته الآن:",
+                    text=(
+                        f"🎉 **أبشر! الكابتن {d_name} وافق على مشوارك.**\n\n"
+                        f"💰 **السعر:** {price if price != 'غير_محدد' else 'حسب الاتفاق'}\n"
+                        f"🤝 **بدأت الدردشة الآمنة:**\n"
+                        f"تحدث مع الكابتن مباشرة عبر هذه الشاشة بخصوص الموقع أو التفاصيل.\n\n"
+                        f"🔒 _لحمايتك، تواصل مع الكابتن داخل البوت فقط._"
+                    ),
                     reply_markup=chat_kb,
                     parse_mode="Markdown"
                 )
-            except: pass
+            except Exception as e:
+                print(f"Error sending msg to rider: {e}")
+
 
             # 7️⃣ إشعار الإدارة (الإرسال لجميع الإداريين)
             admin_msg = (
