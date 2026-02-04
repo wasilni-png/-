@@ -1097,11 +1097,15 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-            # ---------------------------------------------------------
+                # ---------------------------------------------------------
     # 🚕 [نظام عرض السائقين - المحدث لمنع التداخل]
     # ---------------------------------------------------------
     
-    # التحقق أولاً: هل المستخدم في دردشة نشطة؟
+    # 1. إذا كان المستخدم سائقاً، اخرج فوراً ولا تقرأ رسائله كأحياء
+    if user_role == 'driver':
+        return
+
+    # 2. التحقق: هل الراكب في دردشة نشطة حالياً؟
     is_in_chat = False
     conn = get_db_connection()
     if conn:
@@ -1110,19 +1114,20 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_in_chat = cur.fetchone() is not None
         conn.close()
 
-    # الشرط الجديد: يجب أن يكون راكباً، ليس لديه حالة (State)، ليس في دردشة، ولم يضغط زر رئيسي
+    # 3. معالجة الرسالة للراكب فقط (بشرط عدم وجود حالة أو دردشة أو ضغط زر رئيسي)
     if user_role == 'rider' and not state and not is_in_chat and text not in main_buttons:
         
         matched_district = extract_district_from_text(text)
         
-        # إذا وجدنا حياً في النص والمستخدم "حر" (ليس في دردشة أو طلب)
+        # إذا وجدنا حياً في نص الراكب
         if matched_district:
             drivers, drivers_names = await get_drivers_list_by_district(matched_district)
             
             if drivers:
-                # إرسال الطلبات للسائقين
+                # إرسال الطلب للسائقين في الخلفية
                 await send_order_to_drivers(drivers, text, user, context)
                 
+          
 
                 # 4. إنشاء أزرار بأسماء السائقين المتوفرين
                 keyboard_buttons = []
