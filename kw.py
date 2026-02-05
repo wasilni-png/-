@@ -2120,6 +2120,49 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("admin_u_info_"):
         target_id = data.split("_")[3]
         await admin_show_user_details(update, context, target_id)
+    # 1. معالجة الضغط على اسم عضو من القائمة
+    elif data.startswith("admin_info_"):
+        # استخراج الـ ID من الـ Callback Data
+        target_id = data.split("_")[2]
+        
+        await query.answer("🔍 جاري جلب البيانات...")
+        
+        conn = get_db_connection()
+        user_found = None
+        if conn:
+            try:
+                # نستخدم RealDictCursor لجعل الوصول للبيانات سهلاً
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM users WHERE user_id = %s::bigint", (target_id,))
+                    user_found = cur.fetchone()
+            except Exception as e:
+                print(f"❌ خطأ في جلب بيانات العضو: {e}")
+            finally:
+                release_db_connection(conn) # إعادة الاتصال للمجمع
+
+        if user_found:
+            res_txt = (
+                f"👤 **ملف المستخدم:**\n\n"
+                f"🎫 **الاسم:** {user_found['name']}\n"
+                f"🆔 **المعرف:** `{user_found['user_id']}`\n"
+                f"📱 **الجوال:** {user_found.get('phone') or 'غير مسجل'}\n"
+                f"🛠 **الرتبة:** {'🚖 كابتن' if user_found['role'] == 'driver' else '👤 عميل'}\n"
+                f"💰 **الرصيد:** {user_found['balance']} ريال\n"
+                f"🚫 **الحالة:** {'❌ محظور' if user_found.get('is_blocked') else '✅ نشط'}"
+            )
+            
+            # أزرار تحكم سريعة داخل ملف العضو
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{target_id}")],
+                [InlineKeyboardButton("🚫 حظر/إلغاء", callback_data=f"admin_toggle_block_{target_id}")],
+                [InlineKeyboardButton("🔙 العودة للقائمة", callback_data="admin_view_users_0")]
+            ])
+            
+            # تعديل الرسالة الحالية لعرض البيانات
+            await query.edit_message_text(res_txt, reply_markup=kb, parse_mode="Markdown")
+        else:
+            await query.edit_message_text("❌ عذراً، لم يتم العثور على بيانات لهذا العضو.", 
+                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_view_users_0")]]))
 
     # 1. عرض القائمة أو التنقل بين الصفحات
     elif data.startswith("admin_view_users_"):
