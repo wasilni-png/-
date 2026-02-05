@@ -2122,7 +2122,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_show_user_details(update, context, target_id)
 
     # 1. عرض القائمة أو التنقل بين الصفحات
-        elif data.startswith("admin_view_users_"):
+    elif data.startswith("admin_view_users_"):
         page = int(data.split("_")[3]) # الحصول على رقم الصفحة من callback_data
         offset = page * 10 # عرض 10 مستخدمين في كل صفحة
         
