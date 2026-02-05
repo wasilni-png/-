@@ -132,15 +132,23 @@ def get_db_connection():
         return None
 
 def release_db_connection(conn):
-    """إعادة الاتصال للمجمع بدلاً من إغلاقه"""
-    if db_pool and conn:
-        try:
-            db_pool.putconn(conn)
-        except Exception:
-            # إذا فشلت الإعادة، اغلق الاتصال يدوياً
+    if not conn:
+        return
+    try:
+        if db_pool:
+            # التحقق إذا كان الاتصال لا يزال مفتوحاً قبل إعادته للمجمع
+            if not conn.closed:
+                db_pool.putconn(conn)
+            else:
+                # إذا كان مغلقاً أصلاً، فقط نتجاهله (المجمع سيتولى التعويض)
+                pass
+        else:
             conn.close()
-    elif conn:
-        conn.close()
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء تحرير الاتصال: {e}")
+        try: conn.close() 
+        except: pass
+
 
 # ==========================================
 # 3. دوال التعامل مع البيانات (Operations)
@@ -820,7 +828,7 @@ async def register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with conn.cursor() as cur:
                 cur.execute("UPDATE users SET is_verified = True WHERE user_id = %s", (target_driver_id,))
                 conn.commit()
-            conn.close()
+            release_db_connection(conn)
             
             # تحديث الكاش فوراً
             await sync_all_users(force=True)
@@ -1468,7 +1476,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     SET phone = EXCLUDED.phone, role = 'rider', is_verified = True
                 """, (user_id, update.effective_chat.id, 'rider', user_info.full_name, phone, True))
                 conn.commit()
-            conn.close()
+            release_db_connection(conn)
             await sync_all_users(force=True)
 
         # 3. فحص سبب التسجيل (رابط خارجي أم يدوي)
@@ -1543,7 +1551,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text(f"⚠️ حدث خطأ أثناء الحذف: {e}")
             finally:
-                conn.close()
+                release_db_connection(conn)
         
         context.user_data['state'] = None  # إعادة تعيين الحالة
         return
@@ -1617,7 +1625,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             cur.execute("UPDATE users SET districts = %s WHERE user_id = %s", (text, user_id))
             conn.commit()
-        conn.close() 
+        release_db_connection(conn) 
         
         await sync_all_users() 
         await update.message.reply_text("✅ تم تحديث مناطق عملك بنجاح.")
@@ -1796,7 +1804,7 @@ async def admin_panel_view(update, context):
                 ]
             ]
         finally:
-            conn.close()
+            release_db_connection(conn)
     else:
         # إذا دخل هنا، فهذا يعني أن get_db_connection() أعادت None
         print("🚨 فشل الاتصال بقاعدة البيانات في لوحة التحكم")
@@ -1936,7 +1944,7 @@ async def show_districts_by_city(update: Update, context: ContextTypes.DEFAULT_T
                 res = cur.fetchone()
                 if res and res[0]:
                     current_districts = res[0]
-            conn.close()
+            release_db_connection(conn)
         USER_CACHE[user_id] = {'districts': current_districts}
     
     # تحويل النص إلى قائمة
@@ -2086,7 +2094,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as db_e:
                     print(f"DB Save Error: {db_e}")
                 finally:
-                    conn.close()
+                    release_db_connection(conn)
         
         threading.Thread(target=save_db).start()
 
@@ -2206,7 +2214,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM users WHERE user_id = %s", (target_id,))
                 conn.commit()
-            conn.close()
+            release_db_connection(conn)
             await query.answer("✅ تم حذف العضو بنجاح", show_alert=True)
             await admin_list_users(update, context, 0) # العودة للقائمة
         # 1. عند ضغط السائق على زر "اقتراح سعر آخر"
@@ -2582,7 +2590,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         start_chat_session(driver_id, rider_id)
                         conn.commit()
                 finally:
-                    conn.close()
+                    release_db_connection(conn)
 
             # 3️⃣ تحديث الذاكرة المحلية
             context.user_data.update({'chat_with': rider_id, 'order_status': 'ACCEPTED'})
@@ -2611,7 +2619,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cur.execute("SELECT name FROM users WHERE user_id = %s", (driver_id,))
                     res = cur.fetchone()
                     d_name = res[0] if res and res[0] else query.from_user.full_name
-                conn.close()
+                release_db_connection(conn)
 
             if not r_name or r_name == 'عميل':
                 conn = get_db_connection()
@@ -2619,7 +2627,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cur.execute("SELECT name FROM users WHERE user_id = %s", (rider_id,))
                     res = cur.fetchone()
                     r_name = res[0] if res and res[0] else "عميل"
-                conn.close()
+                release_db_connection(conn)
 
 
             # 6️⃣ إرسال الإشعارات للطرفين
@@ -2884,7 +2892,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             cur.execute("UPDATE users SET is_blocked = TRUE WHERE user_id = %s", (target_id,))
             conn.commit()
-        conn.close()
+        release_db_connection(conn)
         await query.answer("✅ تم حظر المستخدم بنجاح")
         await query.edit_message_caption(caption=query.message.caption + "\n\n🚫 (تم حظر هذا العضو)")
 
@@ -2908,7 +2916,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             cur.execute("UPDATE users SET is_verified = %s WHERE user_id = %s", (is_verified, target_uid))
             conn.commit()
-        conn.close()
+        release_db_connection(conn)
 
         status_text = "✅ موثق" if is_verified else "❌ مرفوض"
         await query.edit_message_text(f"تم تحديث حالة المستخدم {target_uid} إلى: {status_text}")
@@ -2968,7 +2976,7 @@ async def on_status_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error updating group status: {e}")
             finally:
-                conn.close()
+                release_db_connection(conn)
 
 
 # 2. دالة عرض المجموعات للأدمن (يتم استدعاؤها بـ /groups)
@@ -3008,7 +3016,7 @@ async def list_groups_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
         finally:
-            conn.close()
+            release_db_connection(conn)
 
 
 # 3. معالجة الرسائل الموجهة للمجموعات (توضع داخل دالة استقبال النصوص العامة)
@@ -3056,7 +3064,7 @@ async def track_groups_from_messages(update: Update, context: ContextTypes.DEFAU
                     """, (chat.id, chat.title))
                     conn.commit()
             except: pass
-            finally: conn.close()
+            finally: release_db_connection(conn)
 
 
 async def districts_settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3090,7 +3098,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("SELECT user_id FROM users")
         # تحويل النتائج لقائمة أرقام
         users_list = [row[0] for row in cur.fetchall()]
-    conn.close()
+    release_db_connection(conn)
 
     # 4. بدء عملية الإرسال
     success_count = 0
@@ -3128,7 +3136,7 @@ async def admin_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             cur.execute(f"UPDATE users SET subscription_expiry = NOW() + INTERVAL '{days} days', is_verified=TRUE WHERE user_id = %s", (uid,))
             conn.commit()
-        conn.close()
+        release_db_connection(conn)
 
         await update.message.reply_text(f"✅ تم تفعيل {days} يوم للعضو {uid}")
         await context.bot.send_message(uid, f"🎉 تم تفعيل اشتراكك لمدة {days} يوم.")
@@ -3146,7 +3154,7 @@ async def admin_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, uid))
             conn.commit()
-        conn.close()
+        release_db_connection(conn)
 
         # 🔥 الخطوة الذهبية: تحديث الكاش إجبارياً فوراً
         await sync_all_users(force=True)
@@ -3209,7 +3217,7 @@ async def promote_to_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             await update.message.reply_text(f"❌ خطأ في القاعدة: {e}")
         finally:
-            conn.close()
+            release_db_connection(conn)
 
 
 
@@ -3537,7 +3545,7 @@ async def broadcast_to_drivers(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Error fetching drivers: {e}")
         finally:
-            conn.close()
+            release_db_connection(conn)
 
     if not drivers:
         await update.message.reply_text("❌ لم يتم العثور على سائقين مسجلين في القاعدة.")
@@ -3619,7 +3627,7 @@ async def admin_get_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
     finally:
-        if conn: conn.close()
+        if conn: release_db_connection(conn)
 
 async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. أهم حماية: التأكد أن التحديث هو رسالة حقيقية وليس "حدث زر"
@@ -3670,7 +3678,7 @@ async def chat_relay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception as e:
             print(f"❌ SQL Log Error: {e}")
         finally:
-            conn.close()
+            release_db_connection(conn)
 
     # 6. نقل الرسالة للطرف الآخر (Relay)
     # استخدام copy_message هو الأصح لأنه ينقل الخريطة كخريطة والصورة كصورة
@@ -3760,7 +3768,7 @@ async def admin_list_users(update, context, page=0):
             total_users = cur.fetchone()['count']
             cur.execute("SELECT * FROM users ORDER BY user_id DESC LIMIT %s OFFSET %s", (limit, offset))
             users = cur.fetchall()
-        conn.close()
+        release_db_connection(conn)
 
     if not users:
         await query.answer("لا يوجد أعضاء حالياً.")
@@ -3822,7 +3830,7 @@ async def admin_pic_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error fetching drivers for picsend: {e}")
         finally:
-            conn.close()
+            release_db_connection(conn)
 
     if not drivers_to_send:
         await update.message.reply_text("⚠️ لا يوجد سائقين مسجلين في قاعدة البيانات.")
@@ -3868,7 +3876,7 @@ async def admin_show_user_details(update, context, target_id):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT * FROM users WHERE user_id = %s", (target_id,))
             user_data = cur.fetchone()
-        conn.close()
+        release_db_connection(conn)
 
     if not user_data:
         await query.answer("❌ لم يتم العثور على بيانات العضو.")
