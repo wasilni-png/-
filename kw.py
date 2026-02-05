@@ -57,8 +57,8 @@ def run_flask():
 # ==================== ⚙️ 1. الإعدادات ====================
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
-DB_URL = "postgresql://postgres.nmteaqxrtcegxmgvsbzr:mohammedfahdypb@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
+
+BOT_TOKEN = "7687724209:AAF-Wq75Qk-NCLjARYie36z_yJbP65t8zBg"
 ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
@@ -87,22 +87,36 @@ CITIES_DISTRICTS = {
 }
 
 
-# إنشاء مجمع اتصالات عالمي (يفتح 1 إلى 20 اتصالاً ويبقيها جاهزة)
+# ==========================================
+# 1. إعداد مجمع الاتصالات (The Engine Room)
+# ==========================================
+
+# تأكد أن DB_URL في ريندر هو رابط الـ Transaction (المنتهي بـ :6543)
+DB_URL = os.environ.get("DATABASE_URL")
+
 try:
+    # إنشاء مجمع يتسع لـ 1 إلى 20 اتصال متزامن
     db_pool = psycopg2.pool.ThreadedConnectionPool(
-        1, 20, DB_URL
+        minconn=1, 
+        maxconn=20, 
+        dsn=DB_URL,
+        sslmode='require' # ضروري جداً لريندر
     )
     print("✅ تم تفعيل مجمع اتصالات قاعدة البيانات (Connection Pool)")
 except Exception as e:
     print(f"❌ فشل إنشاء مجمع الاتصالات: {e}")
     db_pool = None
 
+# ==========================================
+# 2. دوال الإدارة الأساسية (Helper Functions)
+# ==========================================
+
 def get_db_connection():
     """سحب اتصال جاهز من المجمع (سريع جداً)"""
     try:
         if db_pool:
             return db_pool.getconn()
-        return psycopg2.connect(DB_URL)
+        return psycopg2.connect(DB_URL, sslmode='require')
     except Exception as e:
         print(f"❌ فشل جلب اتصال: {e}")
         return None
@@ -110,9 +124,126 @@ def get_db_connection():
 def release_db_connection(conn):
     """إعادة الاتصال للمجمع بدلاً من إغلاقه"""
     if db_pool and conn:
-        db_pool.putconn(conn)
+        try:
+            db_pool.putconn(conn)
+        except Exception:
+            # إذا فشلت الإعادة، اغلق الاتصال يدوياً
+            conn.close()
     elif conn:
         conn.close()
+
+# ==========================================
+# 3. دوال التعامل مع البيانات (Operations)
+# ==========================================
+
+async def update_db_silent(user_id, lat, lon):
+    """تحديث الموقع في الخلفية دون تعطيل البوت"""
+    conn = get_db_connection()
+    if not conn: return
+
+    try:
+        def db_task():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
+                    (lat, lon, user_id)
+                )
+                conn.commit()
+        
+        await asyncio.to_thread(db_task)
+    except Exception as e:
+        print(f"❌ خطأ في تحديث الموقع الخلفي: {e}")
+    finally:
+        release_db_connection(conn)
+
+def get_chat_partner(user_id):
+    """جلب معرف الطرف الآخر من قاعدة البيانات"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
+            res = cur.fetchone()
+            return res[0] if res else None
+    except Exception as e:
+        print(f"❌ Error fetching partner: {e}")
+        return None
+    finally:
+        release_db_connection(conn)
+
+def start_chat_session(user1_id, user2_id):
+    """ربط الطرفين ببعضهما"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        with conn.cursor() as cur:
+            sql = """
+                INSERT INTO active_chats (user_id, partner_id) 
+                VALUES (%s, %s), (%s, %s)
+                ON CONFLICT (user_id) 
+                DO UPDATE SET partner_id = EXCLUDED.partner_id
+            """
+            cur.execute(sql, (str(user1_id), str(user2_id), str(user2_id), str(user1_id)))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"SQL Error in start_chat_session: {e}")
+        return False
+    finally:
+        release_db_connection(conn)
+
+def end_chat_session(user_id):
+    """إنهاء المحادثة وحذف الارتباط"""
+    conn = get_db_connection()
+    partner_id = None
+    if not conn: return None
+    try:
+        with conn.cursor() as cur:
+            # 1. معرفة الشريك قبل الحذف لرد قيمته
+            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
+            res = cur.fetchone()
+            partner_id = res[0] if res else None
+
+            # 2. الحذف للطرفين
+            cur.execute("DELETE FROM active_chats WHERE user_id = %s OR partner_id = %s", (user_id, user_id))
+            conn.commit()
+    except Exception as e:
+        print(f"Error ending chat: {e}")
+    finally:
+        release_db_connection(conn)
+    return partner_id
+
+async def get_user_role(user_id):
+    """جلب الرتبة وتحديث الكاش (معدلة للعمل مع Pool)"""
+    # فحص الكاش أولاً للسرعة
+    if str(user_id) in USER_CACHE:
+        return USER_CACHE[str(user_id)].get('role', 'rider')
+
+    conn = get_db_connection()
+    if not conn: return 'rider'
+
+    try:
+        def query():
+            with conn.cursor() as cur:
+                cur.execute("SELECT role, is_verified FROM users WHERE user_id = %s", (user_id,))
+                return cur.fetchone()
+        
+        result = await asyncio.to_thread(query)
+        
+        if result:
+            role = result[0]
+            is_verified = result[1]
+            # تحديث الكاش
+            USER_CACHE[str(user_id)] = {'role': role, 'is_verified': is_verified, 'user_id': user_id}
+            return role
+        return 'rider'
+    except Exception as e:
+        print(f"❌ خطأ في get_user_role: {e}")
+        return 'rider'
+    finally:
+        release_db_connection(conn)
+
+
 
 def normalize_text(text):
     if not text: return ""
@@ -256,52 +387,6 @@ def save_chat_log(sender_id, receiver_id, content, msg_type="text"):
 
 
 
-async def update_db_silent(user_id, lat, lon):
-    """
-    تحديث الموقع باستخدام الـ Pool لضمان السرعة القصوى وعدم ثقل البوت
-    """
-    # 1. سحب اتصال جاهز من المجمع (أسرع بـ 10 أضعاف من فتح اتصال جديد)
-    conn = get_db_connection()
-    if not conn:
-        return
-
-    try:
-        # 2. تشغيل التنفيذ في مسار (Thread) منفصل لكي لا يتوقف البوت نهائياً
-        def db_task():
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE users SET lat = %s, lon = %s, last_location_update = NOW() WHERE user_id = %s",
-                    (lat, lon, user_id)
-                )
-                conn.commit()
-        
-        await asyncio.to_thread(db_task)
-        
-    except Exception as e:
-        logger.error(f"❌ خطأ في تحديث الموقع الخلفي: {e}")
-    finally:
-        # 3. ⚠️ أهم خطوة: إعادة الاتصال للمجمع بدلاً من إغلاقه (Close)
-        # استخدم الدالة التي أنشأناها سابقاً لإعادة الاتصال للـ Pool
-        if conn:
-            release_db_connection(conn) 
-
-
-def get_chat_partner(user_id, context=None):
-    """جلب معرف الطرف الآخر من قاعدة البيانات مباشرة"""
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
-            res = cur.fetchone()
-            if res: return res[0]
-    except Exception as e:
-        print(f"❌ Error fetching partner: {e}")
-    finally:
-        # هذا السطر سيعمل دائماً سواء نجح الكود أو فشل
-        # وهو الذي يضمن تحرير الاتصال للمجمع (Pool)
-        release_db_connection(conn)
-    return None
 
 def get_distance(lat1, lon1, lat2, lon2):
     """حساب المسافة بين نقطتين (Haversine Formula)"""
@@ -351,7 +436,7 @@ def update_districts_in_db(user_id, districts_str):
         return False
     finally:
         if conn:
-            conn.close()
+            release_db_connection(conn)
 
 
 
@@ -409,72 +494,6 @@ def extract_district_from_text(text):
 
 # --- دوال الدردشة الوسيطة ---
 
-def start_chat_session(user1_id, user2_id):
-    """ربط الطرفين ببعضهما في قاعدة البيانات"""
-    conn = get_db_connection()
-    if not conn: 
-        return False
-    try:
-        with conn.cursor() as cur:
-            # استخدام قيم واضحة لتجنب أخطاء السنتكس في SQL
-            sql = """
-                INSERT INTO active_chats (user_id, partner_id) 
-                VALUES (%s, %s), (%s, %s)
-                ON CONFLICT (user_id) 
-                DO UPDATE SET partner_id = EXCLUDED.partner_id
-            """
-            cur.execute(sql, (str(user1_id), str(user2_id), str(user2_id), str(user1_id)))
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"SQL Error in start_chat_session: {e}")
-        return False
-    finally:
-        # هذا السطر سيعمل دائماً سواء نجح الكود أو فشل
-        # وهو الذي يضمن تحرير الاتصال للمجمع (Pool)
-        release_db_connection(conn)
-
-
-def end_chat_session(user_id):
-    """إنهاء المحادثة وحذف الارتباط من قاعدة البيانات"""
-    conn = get_db_connection()
-    partner_id = None
-    if not conn: return None
-    try:
-        with conn.cursor() as cur:
-            # 1. جلب معرف الطرف الآخر قبل الحذف
-            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
-            res = cur.fetchone()
-            partner_id = res[0] if res else None
-
-            # 2. حذف الارتباط للطرفين نهائياً
-            if partner_id:
-                cur.execute("DELETE FROM active_chats WHERE user_id IN (%s, %s)", (user_id, partner_id))
-            else:
-                cur.execute("DELETE FROM active_chats WHERE user_id = %s OR partner_id = %s", (user_id, user_id))
-            
-            conn.commit()
-    finally:
-        # هذا السطر سيعمل دائماً سواء نجح الكود أو فشل
-        # وهو الذي يضمن تحرير الاتصال للمجمع (Pool)
-        release_db_connection(conn)
-    return partner_id
-
-
-def get_chat_partner(user_id):
-    """جلب آيدي الطرف الآخر في المحادثة"""
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT partner_id FROM active_chats WHERE user_id = %s", (user_id,))
-            res = cur.fetchone()
-            return res[0] if res else None
-    finally:
-        # هذا السطر سيعمل دائماً سواء نجح الكود أو فشل
-        # وهو الذي يضمن تحرير الاتصال للمجمع (Pool)
-        release_db_connection(conn)
-
 
 def get_main_kb(role, is_verified=True):
     """لوحة المفاتيح الرئيسية حسب الرتبة"""
@@ -496,40 +515,7 @@ def get_main_kb(role, is_verified=True):
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
 
-async def get_user_role(user_id):
-    """جلب رتبة المستخدم مع تحديث الكاش فوراً لضمان عمل الأزرار"""
-    conn = get_db_connection()
-    if not conn:
-        return 'rider'
 
-    try:
-        def query():
-            with conn.cursor() as cur:
-                # نستخدم التحويل لـ BigInt لضمان المطابقة مع تلجرام
-                cur.execute("SELECT role, is_verified FROM users WHERE user_id = %s::bigint", (user_id,))
-                return cur.fetchone()
-        
-        result = await asyncio.to_thread(query)
-        
-        if result:
-            role = result[0]
-            is_verified = result[1]
-            
-            # 🟢 تحديث الكاش فوراً! هذا هو سر عمل الأزرار
-            # إذا لم نحدث الكاش هنا، سيعتبره البوت "غير مسجل" في الخطوة التالية
-            if user_id not in USER_CACHE:
-                USER_CACHE[user_id] = {'role': role, 'is_verified': is_verified, 'user_id': user_id}
-            else:
-                USER_CACHE[user_id].update({'role': role, 'is_verified': is_verified})
-                
-            return role
-        
-        return 'rider' # إذا لم يجد المستخدم في القاعدة أصلاً
-    except Exception as e:
-        print(f"❌ خطأ في get_user_role: {e}")
-        return 'rider'
-    finally:
-        release_db_connection(conn)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1028,7 +1014,7 @@ async def complete_registration(update, context, name, phone=None, plate=None):
         await context.bot.send_message(chat_id=chat_id, text="⚠️ حدث خطأ أثناء التسجيل، جرب مرة ثانية.")
     finally:
         if conn:
-            conn.close()
+            release_db_connection(conn)
 
 # --- طلب الرحلات ---
 async def order_ride_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1433,7 +1419,6 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == 'ADMIN_WAIT_SEARCH_ID' and user_id in ADMIN_IDS:
         search_id = text.strip()
         
-        # التأكد أن المدخل أرقام فقط
         if not search_id.isdigit():
             await update.message.reply_text("⚠️ يرجى إدخال معرف (ID) صحيح (أرقام فقط).")
             return
@@ -1441,33 +1426,40 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db_connection()
         user_found = None
         if conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # تغيير الاستعلام للبحث بـ user_id
-                cur.execute("SELECT * FROM users WHERE user_id = %s", (search_id,))
-                user_found = cur.fetchone()
-            conn.close()
+            try:
+                # نستخدم RealDictCursor لجعل الوصول للبيانات بالأسماء مثل user_found['name']
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # نستخدم التحويل لـ bigint لضمان المطابقة في Postgres
+                    cur.execute("SELECT * FROM users WHERE user_id = %s::bigint", (search_id,))
+                    user_found = cur.fetchone()
+            except Exception as e:
+                print(f"❌ خطأ أثناء البحث عن ID: {e}")
+            finally:
+                # ⚠️ ضروري جداً لإعادة الاتصال للمجمع
+                release_db_connection(conn)
 
         if user_found:
             res_txt = (
                 f"✅ **بيانات المستخدم:**\n\n"
                 f"👤 **الاسم:** {user_found['name']}\n"
                 f"🆔 **ID:** `{user_found['user_id']}`\n"
-                f"📱 **الجوال:** {user_found['phone'] or 'غير مسجل'}\n"
-                f"🛠 **الرتبة:** {'كابتن' if user_found['role'] == 'driver' else 'عميل'}\n"
+                f"📱 **الجوال:** {user_found.get('phone') or 'غير مسجل'}\n"
+                f"🛠 **الرتبة:** {'🚖 كابتن' if user_found['role'] == 'driver' else '👤 عميل'}\n"
                 f"💰 **الرصيد:** {user_found['balance']} ريال\n"
-                f"🚫 **الحالة:** {'❌ محظور' if user_found['is_blocked'] else '✅ نشط'}"
+                f"🚫 **الحالة:** {'❌ محظور' if user_found.get('is_blocked') else '✅ نشط'}"
             )
-            # أزرار تحكم سريعة لهذا المستخدم
+            
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{user_found['user_id']}")],
                 [InlineKeyboardButton("🚫 حظر/إلغاء حظر", callback_data=f"admin_toggle_block_{user_found['user_id']}")]
             ])
             await update.message.reply_text(res_txt, reply_markup=kb, parse_mode="Markdown")
         else:
-            await update.message.reply_text(f"❌ لا يوجد مستخدم مسجل في القاعدة يحمل المعرف: `{search_id}`")
+            await update.message.reply_text(f"❌ لا يوجد مستخدم مسجل بالمعرف: `{search_id}`")
         
         context.user_data['state'] = None 
         return
+
 
 
     # --- استقبال رقم الجوال وإتمام التسجيل ---
@@ -1780,41 +1772,50 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- معالجة المواقع (Location) ---
 
+
 async def admin_panel_view(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
 
-    # جلب الإحصائيات
+    # 1. تعريف المتغيرات بقيم افتراضية (لمنع الانهيار)
+    stats = {"users": "خطأ", "drivers": "خطأ"}
+    keyboard = [[InlineKeyboardButton("🔄 تحديث", callback_data="admin_panel_view")]] 
+
+    # 2. محاولة جلب البيانات
     conn = get_db_connection()
-    stats = {"users": 0, "drivers": 0}
     if conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users")
-            stats['users'] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'driver'")
-            stats['drivers'] = cur.fetchone()[0]
-        conn.close()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                stats['users'] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM users WHERE role = 'driver'")
+                stats['drivers'] = cur.fetchone()[0]
+            
+            # ملء الأزرار فقط في حال نجاح الاتصال
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔍 بحث بالمعرف", callback_data="admin_search_id"),
+                    InlineKeyboardButton("🗑️ حذف عضو", callback_data="admin_delete_user_start")
+                ],
+                [
+                    InlineKeyboardButton("📢 إذاعة عامة", callback_data="admin_broadcast_opt"),
+                    InlineKeyboardButton("💰 شحن رصيد", callback_data="admin_manage_cash")
+                ],
+                [
+                    InlineKeyboardButton("🚫 المحظورين", callback_data="admin_manage_blocked"),
+                    InlineKeyboardButton("📜 سجل المحادثات", callback_data="admin_logs_help")
+                ],
+                [
+                    InlineKeyboardButton("👥 عرض الأعضاء", callback_data="admin_view_users_0")
+                ]
+            ]
+        finally:
+            conn.close()
+    else:
+        # إذا دخل هنا، فهذا يعني أن get_db_connection() أعادت None
+        print("🚨 فشل الاتصال بقاعدة البيانات في لوحة التحكم")
 
-        keyboard = [
-        [
-            InlineKeyboardButton("?? بحث بالمعرف", callback_data="admin_search_id"),
-            InlineKeyboardButton("🗑️ حذف عضو", callback_data="admin_delete_user_start")
-        ],
-        [
-            InlineKeyboardButton("📢 إذاعة عامة", callback_data="admin_broadcast_opt"),
-            InlineKeyboardButton("💰 شحن رصيد", callback_data="admin_manage_cash")
-        ],
-        [
-            InlineKeyboardButton("🚫 المحظورين", callback_data="admin_manage_blocked"),
-            InlineKeyboardButton("📜 سجل المحادثات", callback_data="admin_logs_help")
-        ], # <--- هذه الفاصلة كانت ناقصة هنا
-        [
-            InlineKeyboardButton("👥 عرض الأعضاء", callback_data="admin_view_users_0")
-        ]
-    ]
-
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
     admin_text = (
         f"🛠 **لوحة تحكم الإدارة**\n\n"
@@ -1823,20 +1824,15 @@ async def admin_panel_view(update, context):
         f"اختر من القائمة أدناه لإدارة النظام:"
     )
 
-    # معالجة ذكية للإرسال والتعديل
+    # معالجة الإرسال (كما هي في كودك)
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            # محاولة تعديل الرسالة الحالية
             await update.callback_query.edit_message_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
         except Exception:
-            # إذا فشل التعديل (رسالة محذوفة أو قديمة)، أرسل رسالة جديدة تماماً
             await context.bot.send_message(chat_id=user_id, text=admin_text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        # إرسال رسالة جديدة في حال استخدام الأمر /admin
         await update.message.reply_text(admin_text, reply_markup=reply_markup, parse_mode="Markdown")
-
-
 
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2116,9 +2112,50 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_show_user_details(update, context, target_id)
 
     # 1. عرض القائمة أو التنقل بين الصفحات
-    elif data.startswith("admin_view_users_"):
-        page = int(data.split("_")[3])
-        await admin_list_users(update, context, page)
+        elif data.startswith("admin_view_users_"):
+        page = int(data.split("_")[3]) # الحصول على رقم الصفحة من callback_data
+        offset = page * 10 # عرض 10 مستخدمين في كل صفحة
+        
+        conn = get_db_connection()
+        users_list = []
+        if conn:
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # جلب 10 مستخدمين فقط لضمان سرعة الاستجابة وعدم انهيار البوت
+                    cur.execute("SELECT name, user_id, role FROM users ORDER BY created_at DESC LIMIT 10 OFFSET %s", (offset,))
+                    users_list = cur.fetchall()
+            finally:
+                release_db_connection(conn)
+
+        if not users_list:
+            await query.answer("⚠️ لا يوجد مستخدمين آخرين.")
+            return
+
+        keyboard = []
+        for u in users_list:
+            role_icon = "🚖" if u['role'] == 'driver' else "👤"
+            # زر لكل مستخدم عند الضغط عليه يفتح ملفه (باستخدام دالة البحث التي برمجناها)
+            keyboard.append([InlineKeyboardButton(f"{role_icon} {u['name']} ({u['user_id']})", callback_data=f"admin_info_{u['user_id']}")])
+
+        # أزرار التنقل بين الصفحات
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"admin_view_users_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton("التالي ➡️", callback_data=f"admin_view_users_{page+1}"))
+        keyboard.append(nav_buttons)
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للوحة التحكم", callback_data="admin_back")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                f"👥 **قائمة المسجلين (صفحة {page + 1}):**\nإضغط على اسم المستخدم لإدارته:",
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            # في حال كان النص طويلاً جداً أو لم يتغير
+            await query.answer()
 
     # 2. تأكيد الحذف (سؤال الأدمن قبل الحذف النهائي)
     elif data.startswith("admin_confirm_del_"):
@@ -2211,8 +2248,12 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif data == "admin_back":
-        # العودة للوحة الرئيسية (تحتاج لتحويلها لدالة تستقبل query)
-        await query.message.delete()
+        # حذف الرسالة الحالية لتنظيف الشاشة
+        try:
+            await query.message.delete()
+        except:
+            pass
+        # استدعاء اللوحة الرئيسية مجدداً
         await admin_panel_view(update, context)
 
     elif data == "admin_search_id":
@@ -2331,18 +2372,19 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("admin_leave_"):
         gid = data.split("_")[2]
+        conn = get_db_connection() # سحب اتصال
         try:
             await context.bot.leave_chat(chat_id=gid)
-            
-            # حذف من القاعدة
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM bot_groups WHERE group_id = %s", (gid,))
-                conn.commit()
-            
-            await query.edit_message_text(f"✅ تم الخروج من المجموعة `{gid}` بنجاح.")
+            if conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM bot_groups WHERE group_id = %s", (gid,))
+                    conn.commit()
+            await query.edit_message_text(f"✅ تم الخروج من المجموعة `{gid}` وحذفها من القاعدة.")
         except Exception as e:
             await query.answer(f"❌ خطأ: {e}", show_alert=True)
+        finally:
+            if conn:
+                release_db_connection(conn) # ⚠️ ضروري جداً لإعادة الاتصال للـ Pool
         return
 
     # ===============================================================
