@@ -1169,6 +1169,47 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 🟢 الحل: تعريف القائمة هنا لمنع خطأ NameError 🟢 ---
     main_buttons = ["🚖 طلب رحلة", "📞 تواصل مع الإدارة", "💰 محفظتي", "🔙 العودة للقائمة الرئيسية", "📍 تحديث موقعي", "📝 تحديث الأحياء"]
 
+    # --- [قسم الأدمن: البحث بالمعرف] ---
+    if state == 'ADMIN_WAIT_SEARCH_ID' and user_id in ADMIN_IDS:
+        # تصفير الحالة فوراً لمنع التكرار
+        context.user_data['state'] = None
+
+        if not text.isdigit():
+            await update.message.reply_text("⚠️ المعرف يجب أن يتكون من أرقام فقط.")
+            return
+
+        # محاولة جلب المستخدم (الأولوية للكاش ثم القاعدة)
+        target_id = text
+        target_user = USER_CACHE.get(int(target_id)) or USER_CACHE.get(str(target_id))
+
+        if not target_user:
+            # إذا لم يوجد في الكاش، نسحبه من قاعدة البيانات عبر الـ Pool
+            conn = get_db_connection()
+            if conn:
+                try:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT * FROM users WHERE user_id = %s::bigint", (target_id,))
+                        target_user = cur.fetchone()
+                finally:
+                    release_db_connection(conn)
+
+        if target_user:
+            res_txt = (
+                f"✅ **بيانات المستخدم المستعلم عنه:**\n\n"
+                f"👤 **الاسم:** {target_user.get('name', 'غير معروف')}\n"
+                f"🆔 **ID:** `{target_user['user_id']}`\n"
+                f"🛠 **الرتبة:** {'🚖 كابتن' if target_user.get('role') == 'driver' else '👤 عميل'}\n"
+                f"💰 **الرصيد:** {target_user.get('balance', 0)} ريال\n"
+                f"🚫 **الحالة:** {'❌ محظور' if target_user.get('is_blocked') else '✅ نشط'}"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{target_id}")],
+                [InlineKeyboardButton("🚫 حظر/إلغاء حظر", callback_data=f"admin_toggle_block_{target_id}")]
+            ])
+            await update.message.reply_text(res_txt, reply_markup=kb, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ لم يتم العثور على المعرف `{target_id}` في النظام.")
+        return # إنهاء المعالجة لكي لا يكمل البوت لباقي الدالة
 
     # --- 3. معالجة زر العودة والقائمة الرئيسية ---
         # --- 3. معالجة زر العودة والقائمة الرئيسية ---
@@ -1220,7 +1261,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=partner_id, text=text)
                     return # نخرج فوراً (لا نريد قراءة الحي أثناء الدردشة)
         finally:
-            conn.close()
+            release_db_connection(conn)
 
     # --- 5. العزل الذكي للسائق ---
     if user_role == 'driver':
@@ -1404,72 +1445,6 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb
         )
         return
-
-    
-    
-    # استخراج البيانات
-    
-    
-    
-
-    # ---------------------------------------------------------
-    # [الفلتر الثالث] معالجة حالات البوت (States)
-    # ---------------------------------------------------------
-
-        # --- أ) خطوات التسجيل ---
-        # --- [تعديل] خطوات تسجيل السائق المحدثة ---
-    
-    # 1. استلام الاسم
-    
-
-
-
-    # --- منطق بحث الأدمن عن مستخدم بالجوال ---
-        # --- منطق بحث الأدمن عن مستخدم بالـ ID ---
-    if state == 'ADMIN_WAIT_SEARCH_ID' and user_id in ADMIN_IDS:
-        search_id = text.strip()
-        
-        if not search_id.isdigit():
-            await update.message.reply_text("⚠️ يرجى إدخال معرف (ID) صحيح (أرقام فقط).")
-            return
-
-        conn = get_db_connection()
-        user_found = None
-        if conn:
-            try:
-                # نستخدم RealDictCursor لجعل الوصول للبيانات بالأسماء مثل user_found['name']
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    # نستخدم التحويل لـ bigint لضمان المطابقة في Postgres
-                    cur.execute("SELECT * FROM users WHERE user_id = %s::bigint", (search_id,))
-                    user_found = cur.fetchone()
-            except Exception as e:
-                print(f"❌ خطأ أثناء البحث عن ID: {e}")
-            finally:
-                # ⚠️ ضروري جداً لإعادة الاتصال للمجمع
-                release_db_connection(conn)
-
-        if user_found:
-            res_txt = (
-                f"✅ **بيانات المستخدم:**\n\n"
-                f"👤 **الاسم:** {user_found['name']}\n"
-                f"🆔 **ID:** `{user_found['user_id']}`\n"
-                f"📱 **الجوال:** {user_found.get('phone') or 'غير مسجل'}\n"
-                f"🛠 **الرتبة:** {'🚖 كابتن' if user_found['role'] == 'driver' else '👤 عميل'}\n"
-                f"💰 **الرصيد:** {user_found['balance']} ريال\n"
-                f"🚫 **الحالة:** {'❌ محظور' if user_found.get('is_blocked') else '✅ نشط'}"
-            )
-            
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💰 شحن رصيد", callback_data=f"admin_quickcash_{user_found['user_id']}")],
-                [InlineKeyboardButton("🚫 حظر/إلغاء حظر", callback_data=f"admin_toggle_block_{user_found['user_id']}")]
-            ])
-            await update.message.reply_text(res_txt, reply_markup=kb, parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"❌ لا يوجد مستخدم مسجل بالمعرف: `{search_id}`")
-        
-        context.user_data['state'] = None 
-        return
-
 
 
     # --- استقبال رقم الجوال وإتمام التسجيل ---
