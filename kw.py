@@ -58,7 +58,7 @@ def run_flask():
 
 # 🔴🔴 هام: بيانات الاتصال (يفضل وضعها في متغيرات بيئة لاحقاً)
 
-BOT_TOKEN = "7687724209:AAF-Wq75Qk-NCLjARYie36z_yJbP65t8zBg"
+BOT_TOKEN = "8498451295:AAGt1R7THllSjYtEe5hvIEPnPhRkS_iBcnU"
 ADMIN_IDS = [8563113166, 7580027135, 5027690233]
 
 # الكلمات المفتاحية للبحث في المجموعات
@@ -112,13 +112,23 @@ except Exception as e:
 # ==========================================
 
 def get_db_connection():
-    """سحب اتصال جاهز من المجمع (سريع جداً)"""
     try:
+        conn = None
         if db_pool:
-            return db_pool.getconn()
-        return psycopg2.connect(DB_URL, sslmode='require')
+            conn = db_pool.getconn()
+            # التأكد من أن الاتصال لا يزال يعمل
+            with conn.cursor() as cur:
+                cur.execute('SELECT 1') # نبض القلب (Heartbeat)
+        else:
+            conn = psycopg2.connect(DB_URL, sslmode='require', connect_timeout=10)
+        return conn
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # إذا وجد اتصال ميت، قم بإزالته وفتح واحد جديد فوراً
+        if conn:
+            db_pool.putconn(conn, close=True)
+        return db_pool.getconn()
     except Exception as e:
-        print(f"❌ فشل جلب اتصال: {e}")
+        print(f"❌ خطأ حرج في قاعدة البيانات: {e}")
         return None
 
 def release_db_connection(conn):
