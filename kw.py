@@ -115,26 +115,33 @@ except Exception as e:
 # ==========================================
 
 def get_db_connection():
-    """الحصول على اتصال آمن مع إعادة محاولة الاتصال إذا سقط المجمع"""
+    """الحصول على اتصال آمن مع فحص حيويته (Health Check)"""
     global db_pool
     
-    # 1. إذا لم يتم إنشاء المجمع أصلاً عند تشغيل البوت
     if db_pool is None:
         try:
-            # تأكد أن DB_URL يبدأ بـ postgresql:// وليس postgres://
             fixed_url = DB_URL.replace("postgres://", "postgresql://")
-            db_pool = pool.SimpleConnectionPool(1, 20, dsn=fixed_url, sslmode='require')
-            print("✅ تم إعادة إنشاء مجمع الاتصالات بنجاح")
+            db_pool = psycopg2.pool.ThreadedConnectionPool(1, 20, dsn=fixed_url, sslmode='require')
         except Exception as e:
             print(f"❌ فشل إنشاء المجمع: {e}")
             return None
 
-    # 2. محاولة سحب اتصال من المجمع
     try:
-        return db_pool.getconn()
+        conn = db_pool.getconn()
+        
+        # --- الفحص الحيوي (Health Check) ---
+        # نقوم بعمل استعلام فارغ للتأكد من أن الاتصال لا يزال حياً
+        try:
+            with conn.cursor() as tmp_cur:
+                tmp_cur.execute('SELECT 1')
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            print("🔄 اكتشاف اتصال ميت في المجمع، يتم استبداله...")
+            db_pool.putconn(conn, close=True) # التخلص من الاتصال التالف
+            return db_pool.getconn()          # جلب اتصال جديد ونظيف
+            
+        return conn
     except Exception as e:
-        print(f"⚠️ خطأ في سحب اتصال من المجمع: {e}")
-        # إذا تعطل المجمع، نقوم بتفريغه لمحاولة إعادة إنشائه في المرة القادمة
+        print(f"⚠️ خطأ في سحب اتصال: {e}")
         db_pool = None 
         return None
 
@@ -1327,23 +1334,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             release_db_connection(conn)
 
     # --- 5. العزل الذكي للسائق ---
-    if user_role == 'driver':
-        # 1. قائمة بأزرار السائق التي يجب أن تعمل
-        driver_buttons = [
-            "📍 تحديث موقعي", 
-            "📝 تحديث الأحياء", 
-            "ℹ️ حالة اشتراكي", 
-            "📞 تواصل مع الإدارة",
-            "🔙 العودة للقائمة الرئيسية"
-        ]
-
-        # 2. إذا كان النص المضغوط هو أحد هذه الأزرار، لا تخرج (دع الكود يكمل للأسفل)
-        if text in driver_buttons:
-            pass # سيكمل البوت للشروط التي تعالج هذه الأزرار
-        else:
-            # 3. إذا أرسل السائق أي نص آخر (ليس زراً)، هنا نوقفه
-            return 
-
+    
 
     # --- 6. نظام عرض السائقين (للركاب فقط) ---
     if user_role == 'rider' and not state and text not in main_buttons:
