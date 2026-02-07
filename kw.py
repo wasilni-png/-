@@ -1936,6 +1936,7 @@ async def admin_panel_view(update, context):
 
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # السطر الأهم: استلام التحديث سواء كان رسالة جديدة أو تحديث للموقع الحي
     msg = update.message or update.edited_message
     if not msg or not msg.location:
         return
@@ -1945,105 +1946,84 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get('state')
     current_time = time.time()
 
-    # جلب بيانات المستخدم من الكاش
+    # جلب بيانات المستخدم
     user_data = USER_CACHE.get(user_id) or {}
-    user_role = user_data.get('role', UserRole.RIDER) # الافتراضي راكب
+    user_role = user_data.get('role', UserRole.RIDER)
 
-    # 1. تحديث الكاش المحلي فوراً
+    # --- 🟢 أولاً: فحص صلاحية السائق قبل أي معالجة 🟢 ---
+    if user_role == UserRole.DRIVER:
+        from datetime import datetime
+        import pytz
+        expiry = user_data.get('subscription_expiry')
+        
+        # إذا كان غير مشترك، نوقف المعالجة فوراً
+        if not expiry or expiry < datetime.now(pytz.utc):
+            # نرسل تنبيه مرة واحدة فقط كل 10 دقائق لكي لا نزعج السائق أثناء حركته
+            last_alert = context.user_data.get('last_sub_alert', 0)
+            if current_time - last_alert > 600: 
+                try: await context.bot.send_message(user_id, "⚠️ اشتراكك منتهي، لن يتم تحديث موقعك للركاب.")
+                except: pass
+                context.user_data['last_sub_alert'] = current_time
+            return
+
+    # --- 🔵 ثانياً: تحديث الموقع (يعمل الآن مع الموقع الحي) 🔵 ---
+    # تحديث الكاش المحلي
     if user_id in USER_CACHE:
         USER_CACHE[user_id]['lat'] = lat_val
         USER_CACHE[user_id]['lon'] = lon_val
     
-    # 2. تحديث قاعدة البيانات "بذكاء" (كل 30 ثانية فقط لتجنب الثقل)
+    # تحديث قاعدة البيانات (كل 60 ثانية)
     last_upd = LAST_DB_UPDATE.get(user_id, 0)
     if (current_time - last_upd) > 60:
         LAST_DB_UPDATE[user_id] = current_time
         asyncio.create_task(update_db_silent(user_id, lat_val, lon_val))
 
-    # 3. تمرير الموقع في المحادثات النشطة (فقط إذا كان هناك شات قائم)
+    # --- 🟡 ثالثاً: معالجة الحالات الخاصة 🟡 ---
+
+    # 1. إذا كان في شات نشط: مرر الموقع للطرف الآخر
     if context.user_data.get('in_active_chat'):
         partner_id = get_chat_partner(user_id)
         if partner_id:
             try:
+                # نستخدم copy_message لنقل إحداثيات الموقع الحي للطرف الآخر
                 await context.bot.copy_message(chat_id=partner_id, from_chat_id=user_id, message_id=msg.message_id)
-                return 
             except: pass
 
-    # 4. معالجة السائق (استخدام الـ Enum هنا)
-        # 4. معالجة السائق (إضافة فحص الاشتراك هنا) 🟢
-    if user_role == UserRole.DRIVER:
-        # فحص هل الاشتراك منتهٍ؟
-        expiry = user_data.get('subscription_expiry') # تأكد من وجوده في الكاش
-        from datetime import datetime
-        import pytz
-        
-        # إذا كان منتهياً أو غير موجود، لا نحدث الموقع ونخبره
-        if not expiry or expiry < datetime.now(pytz.utc):
-            if state != 'WAIT_LOCATION_FOR_ORDER': # لضمان عدم التداخل مع حالة الراكب
-                try: 
-                    await update.message.reply_text("⚠️ اشتراكك منتهي. يرجى التجديد لتتمكن من تحديث موقعك واستقبال الطلبات.")
-                    await update.message.delete()
-                except: pass
-            return 
+    # 2. إذا كان السائق يرسل موقع "عادي" (ليس حياً) وهو ليس في حالة طلب: نحذف الرسالة لتنظيف الشات
+    if user_role == UserRole.DRIVER and state != 'WAIT_LOCATION_FOR_ORDER':
+        if update.message: # الرسائل الجديدة فقط تحذف، الموقع الحي (Edited) لا يحذف
+            try: await update.message.delete()
+            except: pass
 
-        if state != 'WAIT_LOCATION_FOR_ORDER':
-            if update.message: 
-                try: await update.message.delete()
-                except: pass
-            return
-
-    # 5. معالجة الراكب (عند طلب رحلة جديد)
+    # 3. معالجة الراكب عند طلب رحلة
     if state == 'WAIT_LOCATION_FOR_ORDER':
-        # تجميد الحالة فوراً لمنع تكرار الطلب مع كل تحرك للراكب
         context.user_data['state'] = 'SEARCHING'
+        processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن مشتركين...")
         
-        processing_msg = await msg.reply_text("📡 جاري البحث عن كباتن قريباً منك...")
         sent_info = await broadcast_general_order(update, context)
         
         if sent_info:
+            # ... (كود الأزرار الخاص بك كما هو) ...
             keyboard = []
             for info in sent_info[:10]:
                 d_id = info['chat_id']
-                driver_data = USER_CACHE.get(d_id) or {}
-                driver_name = driver_data.get('name', 'كابتن متوفر')
-                
-                # جلب يوزر نيم السائق إذا وجد، أو استخدام رابط الـ ID المباشر
-                driver_username = driver_data.get('username')
-                if driver_username:
-                    driver_url = f"https://t.me/{driver_username}"
-                else:
-                    driver_url = f"tg://user?id={d_id}"
-                
-                # تعديل الزر لاستخدام url بدلاً من callback_data للتحويل المباشر
-                button = [InlineKeyboardButton(text=f"🚕 {driver_name}", url=driver_url)]
-                keyboard.append(button)
+                d_data = USER_CACHE.get(d_id) or {}
+                d_name = d_data.get('name', 'كابتن متوفر')
+                d_username = d_data.get('username')
+                d_url = f"https://t.me/{d_username}" if d_username else f"tg://user?id={d_id}"
+                keyboard.append([InlineKeyboardButton(text=f"🚕 {d_name}", url=d_url)])
 
-
-            final_text = (
-                f"✅ **تم تعميم طلبك بنجاح!**\n\n"
-                f"وصل طلبك إلى **{len(sent_info)}** كابتن متواجدين حالياً.\n"
-                f"⏳ يرجى الانتظار، سيتم التواصل معك هنا فور قبول أحدهم."
+            await context.bot.edit_message_text(
+                chat_id=user_id,
+                message_id=processing_msg.message_id,
+                text=f"✅ تم تعميم طلبك على {len(sent_info)} كابتن!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
-
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=processing_msg.message_id,
-                    text=final_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="Markdown"
-                )
-            except:
-                await context.bot.send_message(chat_id=user_id, text=final_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            
             asyncio.create_task(start_order_timer(context, sent_info, user_id, processing_msg.message_id))
         else:
-            await context.bot.send_message(chat_id=user_id, text="⚠️ نعتذر، لا يوجد كباتن متاحين حالياً.", reply_markup=get_main_kb(UserRole.RIDER, True))
-            try: await processing_msg.delete()
-            except: pass
+            await msg.reply_text("⚠️ لا يوجد كباتن متاحين حالياً.")
         
         context.user_data['state'] = None
-
 
 # ==================== دالة عرض الأحياء (محدثة) ====================
 
@@ -4191,10 +4171,12 @@ def main():
     
     
     
+    # استخدام عامل "أو" (|) بدلاً من "و" (&) لضمان استقبال النوعين
     application.add_handler(MessageHandler(
-    filters.LOCATION & filters.UpdateType.EDITED_MESSAGE, 
+    filters.LOCATION & (filters.UpdateType.MESSAGE | filters.UpdateType.EDITED_MESSAGE), 
     location_handler
 ), group=1)
+
 
     # ---------------------------------------------------------
     # المجموعة 2: إدارة الحالات (التسجيل والقوائم - Global)
