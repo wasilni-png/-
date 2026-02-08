@@ -2006,9 +2006,16 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. إذا كان السائق يرسل موقع "عادي" (ليس حياً) وهو ليس في حالة طلب: نحذف الرسالة لتنظيف الشات
     if user_role == UserRole.DRIVER and state != 'WAIT_LOCATION_FOR_ORDER':
-        if update.message: # الرسائل الجديدة فقط تحذف، الموقع الحي (Edited) لا يحذف
-            try: await update.message.delete()
-            except: pass
+        # فحص ما إذا كان الموقع المرسل هو "موقع حي"
+        is_live = msg.location and msg.location.live_period is not None
+        
+        # نحذف فقط الرسائل الجديدة (update.message) بشرط ألا تكون "بثاً حياً"
+        if update.message and not is_live:
+            try: 
+                await update.message.delete()
+            except Exception as e:
+                # يمكنك طباعة الخطأ في سجلاتك إذا أردت متابعة الصلاحيات
+                print(f"Cleanup Error: {e}")
 
     # 3. معالجة الراكب عند طلب رحلة
     if state == 'WAIT_LOCATION_FOR_ORDER':
