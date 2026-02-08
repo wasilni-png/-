@@ -1285,6 +1285,7 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- 3. معالجة زر العودة والقائمة الرئيسية ---
     if text == "🔙 العودة للقائمة الرئيسية":
         context.user_data['state'] = None
+        user_id = update.effective_user.id
         
         # 1. جلب البيانات بذكاء (فحص الرقم والنص) لضمان عدم الضياع
         u_info = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id)) or {}
@@ -1294,7 +1295,8 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 3. [إجراء احترازي] إذا لم يجد الرتبة في الكاش، ابحث عنها في قاعدة البيانات
         if not u_role:
-            u_role = get_user_role(user_id) # تأكد أن لديك دالة تجلب من DB مباشرة
+            # تم إضافة await لأن دالتك async def get_user_role
+            u_role = await get_user_role(user_id) 
         
         is_verified = u_info.get('is_verified', True)
 
@@ -1305,14 +1307,27 @@ async def global_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+
         
     if state == 'WAIT_ADMIN_MESSAGE':
         if text == "❌ إلغاء المراسلة":
             context.user_data['state'] = None
-            role = user_info.get('role', 'rider')
-            verified_status = user_info.get('is_verified', False)
+            user_id = update.effective_user.id
+            
+            # 1. جلب البيانات من الكاش (بالمعرف الرقمي والنصي)
+            u_info = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id)) or {}
+            
+            # 2. تحديد الرتبة (وإذا لم توجد في الكاش، نجلبها من قاعدة البيانات)
+            role = u_info.get('role')
+            if not role:
+                # نستخدم await لأن دالة get_user_role معرّفة كـ async
+                role = await get_user_role(user_id) 
+            
+            verified_status = u_info.get('is_verified', False)
+
+            # 3. إرسال القائمة الصحيحة بناءً على الرتبة المحققة
             await update.message.reply_text(
-                "تم الإلغاء.", 
+                "تم الإلغاء والعودة للقائمة الرئيسية.", 
                 reply_markup=get_main_kb(role, verified_status)
             )
             return
@@ -1990,17 +2005,10 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
 
     # 2. إذا كان السائق يرسل موقع "عادي" (ليس حياً) وهو ليس في حالة طلب: نحذف الرسالة لتنظيف الشات
-        # 2. إذا كان السائق يرسل موقع "عادي" (ليس حياً) وهو ليس في حالة طلب: نحذف الرسالة لتنظيف الشات
     if user_role == UserRole.DRIVER and state != 'WAIT_LOCATION_FOR_ORDER':
-        # نتحقق أن الرسالة ليست "موقع حي" (Live Location)
-        is_live = msg.location and msg.location.live_period is not None
-        
-        if update.message and not is_live: 
-            try: 
-                await update.message.delete()
-            except Exception as e:
-                print(f"Error deleting message: {e}")
-
+        if update.message: # الرسائل الجديدة فقط تحذف، الموقع الحي (Edited) لا يحذف
+            try: await update.message.delete()
+            except: pass
 
     # 3. معالجة الراكب عند طلب رحلة
     if state == 'WAIT_LOCATION_FOR_ORDER':
