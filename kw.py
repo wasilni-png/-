@@ -580,57 +580,77 @@ def get_main_kb(role, is_verified=True):
 
 
 
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "عزيزي"
     
-    # سجل تتبع في الكونسول للتأكد من وصول الطلب
-    print(f"DEBUG: Start command triggered for {user_id} with args: {context.args}")
-
-    # 1. معالجة الروابط العميقة (Deep Linking) فوراً كأولوية قصوى
+    # 1. معالجة الروابط العميقة (Deep Linking)
     if context.args:
         arg_value = context.args[0]
         
-        # (أ) روابط المشتركين (contact_ و source_)
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
-            # إرسال رسالة انتظار فورية لإشعار المستخدم بالاستجابة
             status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
 
-            # الآن فقط نقوم بجلب البيانات
-            if not USER_CACHE.get(user_id):
-                await get_user_role(user_id)
-            
-            user = USER_CACHE.get(user_id) or {}
-            expiry = user.get('subscription_expiry')
-            
-            # فحص الاشتراك
-            is_active = False
-            if user.get('role') == 'driver' and expiry:
-                # التحقق من أن التاريخ لم ينتهِ
-                if expiry > datetime.now(timezone.utc):
-                    is_active = True
+            try:
+                # التأكد من تحديث البيانات في الكاش
+                if not USER_CACHE.get(user_id):
+                    await get_user_role(user_id)
+                
+                user = USER_CACHE.get(user_id) or {}
+                expiry = user.get('subscription_expiry')
+                
+                # --- حل مشكلة مقارنة الوقت (Timezone Fix) ---
+                is_active = False
+                if user.get('role') == 'driver' and expiry:
+                    # التأكد أن التوقيتين من نفس النوع (Aware)
+                    if expiry.tzinfo is None:
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    
+                    if expiry > datetime.now(timezone.utc):
+                        is_active = True
 
-            if arg_value.startswith("contact_"):
-                target_id = arg_value.replace("contact_", "")
-                if is_active:
-                    await status_msg.edit_text(
-                        f"✅ **تم التحقق من اشتراكك**\nيمكنك الآن مراسلة العميل مباشرة:",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 مراسلة الآن", url=f"tg://user?id={target_id}")]])
-                    )
-                else:
-                    await status_msg.edit_text("❌ هذا الرابط متاح للمشتركين النشطين فقط.\nتواصل مع الإدارة للتفعيل: @x3FreTx")
-                return
-
-            elif arg_value.startswith("source_"):
+                # تحليل الرابط لاستخراج البيانات
+                # ملاحظة: حتى لو الرابط يبدأ بـ contact_، سنحوله لمصدر الطلب كما طلبت
+                if arg_value.startswith("contact_"):
+                    # إذا أردت استخراج الـ ID الممرر (رغم أننا لن نستخدمه للتواصل المباشر)
+                    data_parts = arg_value.split("_")
+                
+                # استخراج بيانات المصدر (التي نرسلها دائماً في دالة notify_channel)
+                # يفضل أن ترسل دالة notify_channel الرابط هكذا: source_CHATID_MSGID
                 parts = arg_value.split("_")
-                if is_active and len(parts) >= 3:
-                    await status_msg.edit_text(
-                        "✅ **تم التحقق من اشتراكك**\nرابط المصدر:",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 عرض المصدر", url=f"https://t.me/c/{parts[1]}/{parts[2]}")]])
-                    )
+
+                if is_active:
+                    if len(parts) >= 3:
+                        chat_id = parts[1]
+                        msg_id = parts[2]
+                        # الرابط الذي يفتح الرسالة في الجروب (المصدر)
+                        source_url = f"https://t.me/c/{chat_id}/{msg_id}"
+                        
+                        await status_msg.edit_text(
+                            "✅ **تم التحقق من اشتراكك**\n\nبسبب قيود الخصوصية لدى بعض العملاء، يرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه:",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]
+                            ]),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                    else:
+                        await status_msg.edit_text("❌ خطأ في تنسيق رابط المصدر.")
                 else:
-                    await status_msg.edit_text("❌ صلاحية الوصول مرفوضة. يرجى الاشتراك أولاً.")
+                    await status_msg.edit_text(
+                        "❌ **عذراً، هذا الرابط مخصص للمشتركين فقط**\nتواصل مع الإدارة لتفعيل حسابك:",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]])
+                    )
                 return
+
+            except Exception as e:
+                print(f"Error in start_command: {e}")
+                await status_msg.edit_text("⚠️ حدث خطأ أثناء التحقق. يرجى المحاولة لاحقاً.")
+                return
+
+    # باقي كود الترحيب العادي (إذا لم يوجد args)
+    # ...
 
         # --- باقي الحالات الأصلية (order, reg_driver, إلخ) ---
     
