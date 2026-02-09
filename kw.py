@@ -246,21 +246,17 @@ def end_chat_session(user_id):
     return partner_id
 
 async def get_user_role(user_id):
-    """جلب البيانات كاملة وتحديث الكاش مع دعم كافة الحقول"""
-    # نحول الـ ID لنص لتوحيد مفاتيح الكاش
+    """جلب البيانات الكاملة من Supabase وتحديث الكاش"""
     uid_str = str(user_id)
     
-    # فحص الكاش، ولكن نتأكد أن البيانات فيه كاملة وليست مجرد الرتبة
-    if uid_str in USER_CACHE and 'subscription_expiry' in USER_CACHE[uid_str]:
-        return USER_CACHE[uid_str].get('role', 'rider')
-
+    # محاولة تحديث البيانات دائماً عند الفحص لضمان الدقة
     conn = get_db_connection()
     if not conn: return 'rider'
 
     try:
         def query():
             with conn.cursor() as cur:
-                # نسحب كل الأعمدة المهمة لضمان توفرها في الكاش
+                # نجلب كافة الأعمدة التي يحتاجها البوت (الاسم، الرتبة، التاريخ، الرصيد)
                 cur.execute(
                     "SELECT role, is_verified, name, subscription_expiry, balance FROM users WHERE user_id = %s", 
                     (user_id,)
@@ -270,6 +266,7 @@ async def get_user_role(user_id):
         result = await asyncio.to_thread(query)
         
         if result:
+            # ترتيب البيانات حسب الـ SELECT أعلاه
             user_data = {
                 'role': result[0],
                 'is_verified': result[1],
@@ -278,16 +275,17 @@ async def get_user_role(user_id):
                 'balance': result[4],
                 'user_id': user_id
             }
-            # تحديث الكاش بالقاموس كاملاً
+            # تخزين القاموس كاملاً في الكاش
             USER_CACHE[uid_str] = user_data
             return user_data['role']
-            
+        
         return 'rider'
     except Exception as e:
-        print(f"❌ خطأ عميق في get_user_role: {e}")
+        print(f"❌ خطأ في جلب بيانات المستخدم {user_id}: {e}")
         return 'rider'
     finally:
         release_db_connection(conn)
+
 
 def normalize_text(text):
     if not text: return ""
