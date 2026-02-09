@@ -599,24 +599,30 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
             try:
-                # محاولة جلب البيانات بكل الطرق (نص ورقم)
+                # 1. تحديث البيانات من القاعدة لضمان عدم الاعتماد على كاش قديم
+                await get_user_role(user_id)
                 user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
                 
-                # --- سطر للديبرج (سيظهر في شاشتك السوداء فقط) ---
-                print(f"DEBUG: Checking User {user_id}. Found in Cache: {user}")
+                print(f"DEBUG: User {user_id} Data: {user}")
                 
                 is_active = False
-                reason = "لم يتم العثور عليك في الكاش"
+                reason = "لم يتم العثور على حسابك"
 
                 if user:
-                    role = str(user.get('role', '')).lower() 
+                    role = str(user.get('role', '')).lower()
                     expiry = user.get('subscription_expiry')
                     
-                    print(f"DEBUG: Role: {role}, Expiry: {expiry}")
-
                     if role == 'driver':
                         if expiry:
-                            # توحيد التوقيت ومقارنته
+                            # --- تحويل النص إلى تاريخ إذا لزم الأمر ---
+                            if isinstance(expiry, str):
+                                try:
+                                    # إزالة حرف Z أو التوقيت الزائد وتنسيق النص
+                                    expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+                                except Exception as e:
+                                    print(f"Format Error: {e}")
+                            
+                            # --- فحص الصلاحية ---
                             if isinstance(expiry, datetime):
                                 if expiry.tzinfo is None:
                                     expiry = expiry.replace(tzinfo=timezone.utc)
@@ -626,13 +632,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 else:
                                     reason = "اشتراكك منتهي الصلاحية"
                             else:
-                                reason = "تنسيق تاريخ الاشتراك غير صحيح"
+                                reason = "تنسيق التاريخ غير مدعوم"
                         else:
                             reason = "لا يوجد تاريخ انتهاء مسجل"
                     else:
-                        reason = f"رتبتك الحالية هي ({role}) وليست سائق"
+                        reason = f"رتبتك هي ({role}) وليست سائق"
 
                 if is_active:
+                    # استخراج معلومات الرسالة الأصلية
                     parts = arg_value.split("_")
                     if len(parts) >= 3:
                         chat_id = parts[1]
@@ -640,14 +647,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         source_url = f"https://t.me/c/{chat_id}/{msg_id}"
                         
                         await status_msg.edit_text(
-                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه:",
+                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر المصدر أدناه:",
                             reply_markup=InlineKeyboardMarkup([
                                 [InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]
                             ]),
                             parse_mode=ParseMode.MARKDOWN
                         )
                     else:
-                        await status_msg.edit_text("❌ عذراً، الرابط غير مكتمل أو تالف.")
+                        await status_msg.edit_text("❌ الرابط تالف أو غير مكتمل.")
                 else:
                     await status_msg.edit_text(
                         f"❌ **عذراً، اشتراكك غير مفعل**\nالسبب: {reason}",
@@ -655,18 +662,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]
                         ])
                     )
-                return 
-
-            except Exception as e:
-                print(f"CRITICAL ERROR: {e}")
-                await status_msg.edit_text("⚠️ حدث خطأ تقني أثناء الفحص.")
                 return
 
-
             except Exception as e:
-                print(f"Error in Deep Link: {e}")
+                print(f"Error: {e}")
                 await status_msg.edit_text("⚠️ حدث خطأ أثناء التحقق.")
                 return
+
 
         # --- [ب] روابط طلبات الرحلات والتسجيل ---
         elif arg_value.startswith("order_"):
