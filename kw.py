@@ -584,70 +584,53 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "عزيزي"
     
-    context.user_data.clear()
+    # سجل تتبع في الكونسول للتأكد من وصول الطلب
+    print(f"DEBUG: Start command triggered for {user_id} with args: {context.args}")
 
-    if not (USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))):
-        await get_user_role(user_id) 
-
-    user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
-    is_registered = True if user else False
-
-    # 1. معالجة الروابط العميقة (Deep Linking) أولاً
+    # 1. معالجة الروابط العميقة (Deep Linking) فوراً كأولوية قصوى
     if context.args:
         arg_value = context.args[0]
+        
+        # (أ) روابط المشتركين (contact_ و source_)
+        if arg_value.startswith("contact_") or arg_value.startswith("source_"):
+            # إرسال رسالة انتظار فورية لإشعار المستخدم بالاستجابة
+            status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
 
-        # --- الحالة الجديدة 1: فحص الاشتراك لمراسلة العميل ---
-        if arg_value.startswith("contact_"):
-            target_customer_id = arg_value.replace("contact_", "")
+            # الآن فقط نقوم بجلب البيانات
+            if not USER_CACHE.get(user_id):
+                await get_user_role(user_id)
             
-            # فحص الاشتراك في قاعدة البيانات
+            user = USER_CACHE.get(user_id) or {}
+            expiry = user.get('subscription_expiry')
+            
+            # فحص الاشتراك
             is_active = False
-            if is_registered and user.get('role') == 'driver':
-                expiry = user.get('subscription_expiry') # تأكد من جلب هذا الحقل في دالة get_user_role
-                if expiry and expiry > datetime.now(timezone.utc):
+            if user.get('role') == 'driver' and expiry:
+                # التحقق من أن التاريخ لم ينتهِ
+                if expiry > datetime.now(timezone.utc):
                     is_active = True
 
-            if is_active:
-                await update.message.reply_text(
-                    "✅ **تم التحقق من اشتراكك**\nيمكنك الآن مراسلة العميل مباشرة عبر الرابط أدناه:",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💬 مراسلة العميل الآن", url=f"tg://user?id={target_customer_id}")]
-                    ]),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    "❌ **عذراً، هذا الرابط مخصص للمشتركين فقط**\nيرجى التواصل مع الإدارة لتفعيل اشتراكك والوصول لبيانات العملاء.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]
-                    ])
-                )
-            return
-
-        # --- الحالة الجديدة 2: فحص الاشتراك لعرض مصدر الطلب ---
-        elif arg_value.startswith("source_"):
-            parts = arg_value.split("_") # ستكون الصيغة source_chatid_msgid
-            if len(parts) >= 3:
-                chat_id = parts[1]
-                msg_id = parts[2]
-                
-                is_active = False
-                if is_registered and user.get('role') == 'driver':
-                    expiry = user.get('subscription_expiry')
-                    if expiry and expiry > datetime.now(timezone.utc):
-                        is_active = True
-
+            if arg_value.startswith("contact_"):
+                target_id = arg_value.replace("contact_", "")
                 if is_active:
-                    await update.message.reply_text(
-                        "✅ **تم التحقق من اشتراكك**\nإليك رابط مصدر الطلب في الجروب:",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔗 عرض المصدر", url=f"https://t.me/c/{chat_id}/{msg_id}")]
-                        ]),
-                        parse_mode=ParseMode.MARKDOWN
+                    await status_msg.edit_text(
+                        f"✅ **تم التحقق من اشتراكك**\nيمكنك الآن مراسلة العميل مباشرة:",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 مراسلة الآن", url=f"tg://user?id={target_id}")]])
                     )
                 else:
-                    await update.message.reply_text("❌ هذا الرابط متاح فقط للمشتركين النشطين.")
-            return
+                    await status_msg.edit_text("❌ هذا الرابط متاح للمشتركين النشطين فقط.\nتواصل مع الإدارة للتفعيل: @x3FreTx")
+                return
+
+            elif arg_value.startswith("source_"):
+                parts = arg_value.split("_")
+                if is_active and len(parts) >= 3:
+                    await status_msg.edit_text(
+                        "✅ **تم التحقق من اشتراكك**\nرابط المصدر:",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 عرض المصدر", url=f"https://t.me/c/{parts[1]}/{parts[2]}")]])
+                    )
+                else:
+                    await status_msg.edit_text("❌ صلاحية الوصول مرفوضة. يرجى الاشتراك أولاً.")
+                return
 
         # --- باقي الحالات الأصلية (order, reg_driver, إلخ) ---
     
