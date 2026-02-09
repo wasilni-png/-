@@ -592,10 +592,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg_value = context.args[0]
         
         # --- [أ] روابط فحص الاشتراك (المصدر والعميل) ---
+                # --- [أ] روابط فحص الاشتراك (المصدر والعميل) ---
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من الاشتراك...")
             try:
-                # 1. تحديث إجباري للبيانات من القاعدة لضمان قراءة التعديلات الجديدة
+                # 1. تحديث إجباري للبيانات من القاعدة
                 await get_user_role(user_id)
                 user = USER_CACHE.get(str(user_id)) or {}
                 
@@ -603,43 +604,52 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 expiry = user.get('subscription_expiry')
                 
                 is_active = False
-                reason = "غير معروف" # تعريف افتراضي للسبب لتجنب الأخطاء
+                reason = "غير معروف"
+
+                # إعداد المناطق الزمنية باستخدام pytz
+                ksa_tz = pytz.timezone('Asia/Riyadh')
+                now_ksa = datetime.now(ksa_tz)
 
                 # 2. منطق التحقق من الرتبة والتاريخ
                 if role == 'driver':
                     if expiry:
-                        # معالجة التاريخ إذا كان نصاً (قادم من PostgreSQL/Supabase)
+                        # تحويل التاريخ إذا كان نصاً (String) إلى كائن datetime
                         if isinstance(expiry, str):
                             try:
-                                expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
-                            except:
-                                pass
-                        
-                        if isinstance(expiry, datetime):
-                            # توحيد التوقيت الزمني للمقارنة
-                            now = datetime.now(timezone.utc)
-                            if expiry.tzinfo is None:
-                                expiry = expiry.replace(tzinfo=timezone.utc)
+                                # معالجة التنسيق القادم من Supabase
+                                expiry_dt = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+                            except Exception as e:
+                                print(f"Parsing error: {e}")
+                                expiry_dt = None
+                        else:
+                            expiry_dt = expiry
+
+                        if isinstance(expiry_dt, datetime):
+                            # توحيد المنطقة الزمنية لتكون Asia/Riyadh للمقارنة السليمة
+                            if expiry_dt.tzinfo is None:
+                                expiry_dt = ksa_tz.localize(expiry_dt)
+                            else:
+                                expiry_dt = expiry_dt.astimezone(ksa_tz)
                             
-                            if expiry > now:
+                            # المقارنة النهائية
+                            if expiry_dt > now_ksa:
                                 is_active = True
                             else:
-                                reason = "اشتراكك منتهي الصلاحية"
+                                reason = f"اشتراكك منتهي الصلاحية بتاريخ: {expiry_dt.strftime('%Y-%m-%d')}"
                         else:
                             reason = "تنسيق التاريخ في قاعدة البيانات غير صحيح"
                     else:
-                        reason = "لا يوجد تاريخ انتهاء مسجل في حسابك"
+                        reason = "لا يوجد تاريخ انتهاء مسجل في حسابك (التاريخ فارغ)"
                 else:
-                    reason = f"رتبتك الحالية هي ({role})، ويجب أن تكون سائقاً للوصول"
+                    reason = f"رتبتك الحالية ({role}) لا تسمح بالوصول، يجب أن تكون سائقاً"
 
-                # 3. اتخاذ القرار النهائي بناءً على النتيجة
+                # 3. اتخاذ القرار النهائي
                 if is_active:
-                    # استخراج معلومات الرابط (الشات والمجموعة)
                     parts = arg_value.split("_")
                     if len(parts) >= 3:
-                        target_chat = parts[1]
-                        target_msg = parts[2]
-                        # تحويل الآيدي لشكل رابط تليجرام (حذف -100 إذا وجد)
+                        target_chat = str(parts[1])
+                        target_msg = str(parts[2])
+                        # تنظيف الآيدي (إزالة -100)
                         clean_chat = target_chat.replace("-100", "")
                         source_url = f"https://t.me/c/{clean_chat}/{target_msg}"
 
@@ -653,7 +663,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await status_msg.edit_text("❌ الرابط الذي ضغطت عليه تالف أو غير مكتمل.")
                 else:
-                    # إظهار رسالة الفشل مع السبب الدقيق
                     await status_msg.edit_text(
                         f"❌ **عذراً، اشتراكك غير مفعّل**\nالسبب: {reason}",
                         reply_markup=InlineKeyboardMarkup([
@@ -663,8 +672,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
 
             except Exception as e:
-                # طباعة الخطأ في الكونسول لمعرفة السبب الحقيقي (مثل نقص مكتبة أو عمود)
-                print(f"❌ Error in check logic: {e}")
+                import traceback
+                print(f"❌ Error Detail:\n{traceback.format_exc()}")
                 await status_msg.edit_text("⚠️ حدث خطأ فني أثناء معالجة البيانات، يرجى المحاولة لاحقاً.")
             return
 
