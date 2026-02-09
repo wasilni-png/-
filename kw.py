@@ -599,30 +599,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
             try:
-                # 1. تحديث البيانات من القاعدة لضمان عدم الاعتماد على كاش قديم
+                # 1. تحديث البيانات إجبارياً من Supabase (تخطي الكاش القديم)
                 await get_user_role(user_id)
                 user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
                 
-                print(f"DEBUG: User {user_id} Data: {user}")
-                
                 is_active = False
-                reason = "لم يتم العثور على حسابك"
+                reason = "لم يتم العثور على بياناتك"
 
                 if user:
                     role = str(user.get('role', '')).lower()
                     expiry = user.get('subscription_expiry')
                     
+                    # سجل للتأكد مما يقرأه البوت فعلياً
+                    print(f"DEBUG: User {user_id} | Role: {role} | Expiry: {expiry}")
+
                     if role == 'driver':
                         if expiry:
-                            # --- تحويل النص إلى تاريخ إذا لزم الأمر ---
+                            # 2. تحويل التاريخ من نص (Supabase Format) إلى كائن datetime
                             if isinstance(expiry, str):
                                 try:
-                                    # إزالة حرف Z أو التوقيت الزائد وتنسيق النص
+                                    # معالجة تنسيق Supabase ISO مع المنطقة الزمنية
                                     expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
                                 except Exception as e:
                                     print(f"Format Error: {e}")
-                            
-                            # --- فحص الصلاحية ---
+
+                            # 3. التحقق من الصلاحية
                             if isinstance(expiry, datetime):
                                 if expiry.tzinfo is None:
                                     expiry = expiry.replace(tzinfo=timezone.utc)
@@ -632,14 +633,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 else:
                                     reason = "اشتراكك منتهي الصلاحية"
                             else:
-                                reason = "تنسيق التاريخ غير مدعوم"
+                                reason = "تنسيق التاريخ غير مدعوم أو تالف"
                         else:
-                            reason = "لا يوجد تاريخ انتهاء مسجل"
+                            reason = "لا يوجد تاريخ انتهاء مسجل في النظام"
                     else:
-                        reason = f"رتبتك هي ({role}) وليست سائق"
+                        reason = f"رتبتك ({role}) لا تسمح بالوصول"
 
                 if is_active:
-                    # استخراج معلومات الرسالة الأصلية
                     parts = arg_value.split("_")
                     if len(parts) >= 3:
                         chat_id = parts[1]
@@ -654,7 +654,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             parse_mode=ParseMode.MARKDOWN
                         )
                     else:
-                        await status_msg.edit_text("❌ الرابط تالف أو غير مكتمل.")
+                        await status_msg.edit_text("❌ الرابط غير صالح.")
                 else:
                     await status_msg.edit_text(
                         f"❌ **عذراً، اشتراكك غير مفعل**\nالسبب: {reason}",
@@ -666,9 +666,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             except Exception as e:
                 print(f"Error: {e}")
-                await status_msg.edit_text("⚠️ حدث خطأ أثناء التحقق.")
+                await status_msg.edit_text("⚠️ حدث خطأ فني أثناء التحقق.")
                 return
-
 
         # --- [ب] روابط طلبات الرحلات والتسجيل ---
         elif arg_value.startswith("order_"):
