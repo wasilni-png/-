@@ -592,7 +592,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg_value = context.args[0]
         
         # --- [أ] روابط فحص الاشتراك (المصدر والعميل) ---
-         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
+        if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من الاشتراك...")
             try:
                 # 1. تحديث إجباري للبيانات من القاعدة لضمان قراءة التعديلات الجديدة
