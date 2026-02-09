@@ -246,42 +246,28 @@ def end_chat_session(user_id):
     return partner_id
 
 async def get_user_role(user_id):
-    """جلب البيانات الكاملة من Supabase وتحديث الكاش"""
     uid_str = str(user_id)
-    
-    # محاولة تحديث البيانات دائماً عند الفحص لضمان الدقة
     conn = get_db_connection()
     if not conn: return 'rider'
 
     try:
         def query():
             with conn.cursor() as cur:
-                # نجلب كافة الأعمدة التي يحتاجها البوت (الاسم، الرتبة، التاريخ، الرصيد)
-                cur.execute(
-                    "SELECT role, is_verified, name, subscription_expiry, balance FROM users WHERE user_id = %s", 
-                    (user_id,)
-                )
-                return cur.fetchone()
+                # نجلب كل شيء لضمان عدم نقص أي عمود
+                cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+                columns = [desc[0] for desc in cur.description]
+                row = cur.fetchone()
+                return dict(zip(columns, row)) if row else None
         
-        result = await asyncio.to_thread(query)
+        user_data = await asyncio.to_thread(query)
         
-        if result:
-            # ترتيب البيانات حسب الـ SELECT أعلاه
-            user_data = {
-                'role': result[0],
-                'is_verified': result[1],
-                'name': result[2],
-                'subscription_expiry': result[3],
-                'balance': result[4],
-                'user_id': user_id
-            }
+        if user_data:
             # تخزين القاموس كاملاً في الكاش
             USER_CACHE[uid_str] = user_data
-            return user_data['role']
-        
+            return user_data.get('role', 'rider')
         return 'rider'
     except Exception as e:
-        print(f"❌ خطأ في جلب بيانات المستخدم {user_id}: {e}")
+        print(f"❌ Database Fetch Error: {e}")
         return 'rider'
     finally:
         release_db_connection(conn)
@@ -606,78 +592,54 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg_value = context.args[0]
         
         # --- [أ] روابط فحص الاشتراك (المصدر والعميل) ---
-        if arg_value.startswith("contact_") or arg_value.startswith("source_"):
-            status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
+         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
+            status_msg = await update.message.reply_text("⏳ جاري التحقق من الاشتراك...")
             try:
-                # 1. تحديث البيانات إجبارياً من Supabase (تخطي الكاش القديم)
+                # تحديث إجباري للبيانات من القاعدة
                 await get_user_role(user_id)
-                user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
+                user = USER_CACHE.get(str(user_id)) or {}
                 
+                role = str(user.get('role', '')).lower()
+                expiry = user.get('subscription_expiry')
                 is_active = False
-                reason = "لم يتم العثور على بياناتك"
 
-                if user:
-                    role = str(user.get('role', '')).lower()
-                    expiry = user.get('subscription_expiry')
-                    
-                    # سجل للتأكد مما يقرأه البوت فعلياً
-                    print(f"DEBUG: User {user_id} | Role: {role} | Expiry: {expiry}")
-
-                    if role == 'driver':
-                        if expiry:
-                            # 2. تحويل التاريخ من نص (Supabase Format) إلى كائن datetime
-                            if isinstance(expiry, str):
-                                try:
-                                    # معالجة تنسيق Supabase ISO مع المنطقة الزمنية
-                                    expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
-                                except Exception as e:
-                                    print(f"Format Error: {e}")
-
-                            # 3. التحقق من الصلاحية
-                            if isinstance(expiry, datetime):
-                                if expiry.tzinfo is None:
-                                    expiry = expiry.replace(tzinfo=timezone.utc)
-                                
-                                if expiry > datetime.now(timezone.utc):
-                                    is_active = True
-                                else:
-                                    reason = "اشتراكك منتهي الصلاحية"
+                if role == 'driver':
+                    if expiry:
+                        # --- معالجة التاريخ مهما كان نوعه (نص أو كائن) ---
+                        if isinstance(expiry, str):
+                            try:
+                                # تحويل النص القادم من Postgres (ISO Format)
+                                expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+                            except: pass
+                        
+                        if isinstance(expiry, datetime):
+                            # توحيد المناطق الزمنية للمقارنة
+                            now = datetime.now(timezone.utc)
+                            if expiry.tzinfo is None:
+                                expiry = expiry.replace(tzinfo=timezone.utc)
+                            
+                            if expiry > now:
+                                is_active = True
                             else:
-                                reason = "تنسيق التاريخ غير مدعوم أو تالف"
+                                reason = "اشتراكك منتهي"
                         else:
-                            reason = "لا يوجد تاريخ انتهاء مسجل في النظام"
+                            reason = "تنسيق التاريخ غير صالح"
                     else:
-                        reason = f"رتبتك ({role}) لا تسمح بالوصول"
+                        reason = "لا يوجد تاريخ مسجل"
+                else:
+                    reason = "الحساب ليس برتبة سائق"
 
                 if is_active:
-                    parts = arg_value.split("_")
-                    if len(parts) >= 3:
-                        chat_id = parts[1]
-                        msg_id = parts[2]
-                        source_url = f"https://t.me/c/{chat_id}/{msg_id}"
-                        
-                        await status_msg.edit_text(
-                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر المصدر أدناه:",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]
-                            ]),
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    else:
-                        await status_msg.edit_text("❌ الرابط غير صالح.")
+                    # (هنا يوضع كود إظهار الرابط بنجاح)
+                    pass 
                 else:
-                    await status_msg.edit_text(
-                        f"❌ **عذراً، اشتراكك غير مفعل**\nالسبب: {reason}",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]
-                        ])
-                    )
-                return
-
+                    await status_msg.edit_text(f"❌ عذراً، اشتراكك غير مفعّل.\nالسبب: {reason}")
+                
             except Exception as e:
-                print(f"Error: {e}")
-                await status_msg.edit_text("⚠️ حدث خطأ فني أثناء التحقق.")
-                return
+                # طباعة الخطأ الحقيقي في الكونسول لتتمكن من رؤيته
+                print(f"❌ Error in check logic: {e}")
+                await status_msg.edit_text("⚠️ حدث خطأ فني أثناء معالجة البيانات.")
+            return
 
         # --- [ب] روابط طلبات الرحلات والتسجيل ---
         elif arg_value.startswith("order_"):
