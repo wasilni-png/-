@@ -599,37 +599,69 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
             try:
-                expiry = user.get('subscription_expiry') if is_registered else None
+                # محاولة جلب البيانات بكل الطرق (نص ورقم)
+                user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
                 
-                # فحص حالة الاشتراك (معالجة مشكلة التوقيت)
+                # --- سطر للديبرج (سيظهر في شاشتك السوداء فقط) ---
+                print(f"DEBUG: Checking User {user_id}. Found in Cache: {user}")
+                
                 is_active = False
-                if is_registered and user.get('role') == 'driver' and expiry:
-                    if expiry.tzinfo is None:
-                        expiry = expiry.replace(tzinfo=timezone.utc)
-                    if expiry > datetime.now(timezone.utc):
-                        is_active = True
+                reason = "لم يتم العثور عليك في الكاش"
+
+                if user:
+                    role = str(user.get('role', '')).lower() 
+                    expiry = user.get('subscription_expiry')
+                    
+                    print(f"DEBUG: Role: {role}, Expiry: {expiry}")
+
+                    if role == 'driver':
+                        if expiry:
+                            # توحيد التوقيت ومقارنته
+                            if isinstance(expiry, datetime):
+                                if expiry.tzinfo is None:
+                                    expiry = expiry.replace(tzinfo=timezone.utc)
+                                
+                                if expiry > datetime.now(timezone.utc):
+                                    is_active = True
+                                else:
+                                    reason = "اشتراكك منتهي الصلاحية"
+                            else:
+                                reason = "تنسيق تاريخ الاشتراك غير صحيح"
+                        else:
+                            reason = "لا يوجد تاريخ انتهاء مسجل"
+                    else:
+                        reason = f"رتبتك الحالية هي ({role}) وليست سائق"
 
                 if is_active:
                     parts = arg_value.split("_")
                     if len(parts) >= 3:
-                        # تحويل أي طلب (سواء كان كونتكت أو مصدر) إلى رابط المصدر في الجروب
                         chat_id = parts[1]
                         msg_id = parts[2]
                         source_url = f"https://t.me/c/{chat_id}/{msg_id}"
                         
                         await status_msg.edit_text(
-                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه (لتجنب قيود الخصوصية):",
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]]),
+                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه:",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]
+                            ]),
                             parse_mode=ParseMode.MARKDOWN
                         )
                     else:
                         await status_msg.edit_text("❌ عذراً، الرابط غير مكتمل أو تالف.")
                 else:
                     await status_msg.edit_text(
-                        "❌ **عذراً، هذا الرابط للمشتركين فقط**\nتواصل مع الإدارة لتفعيل حسابك:",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]])
+                        f"❌ **عذراً، اشتراكك غير مفعل**\nالسبب: {reason}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]
+                        ])
                     )
-                return # إنهاء الدالة بعد معالجة الرابط
+                return 
+
+            except Exception as e:
+                print(f"CRITICAL ERROR: {e}")
+                await status_msg.edit_text("⚠️ حدث خطأ تقني أثناء الفحص.")
+                return
+
 
             except Exception as e:
                 print(f"Error in Deep Link: {e}")
