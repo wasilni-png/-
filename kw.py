@@ -584,32 +584,73 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "عزيزي"
     
-    # 1. تنظيف الذاكرة
     context.user_data.clear()
 
-    # ✅ التحقق من وجود المستخدم في الكاش أو جلبه من القاعدة (داخل مستوى الدالة)
     if not (USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))):
         await get_user_role(user_id) 
 
-    # 2. جلب بيانات المستخدم من الكاش بعد التحديث
     user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
-    
-    # تحديد حالة التسجيل بناءً على وجود البيانات فعلياً
     is_registered = True if user else False
 
-    # 3. معالجة الدخول العادي (مستخدم مسجل سابقاً)
-    if not context.args and is_registered:
-        # تأكد من استخدام مفتاح 'name' بأمان
-        name_in_db = user.get('name') or first_name
-        await update.message.reply_text(
-            f"👋 مرحباً بك مجدداً يا {name_in_db}", 
-            reply_markup=get_main_kb(user.get('role', 'rider'), user.get('is_verified', False))
-        )
-        return
-
-    # 4. معالجة الروابط العميقة (Deep Linking)
+    # 1. معالجة الروابط العميقة (Deep Linking) أولاً
     if context.args:
         arg_value = context.args[0]
+
+        # --- الحالة الجديدة 1: فحص الاشتراك لمراسلة العميل ---
+        if arg_value.startswith("contact_"):
+            target_customer_id = arg_value.replace("contact_", "")
+            
+            # فحص الاشتراك في قاعدة البيانات
+            is_active = False
+            if is_registered and user.get('role') == 'driver':
+                expiry = user.get('subscription_expiry') # تأكد من جلب هذا الحقل في دالة get_user_role
+                if expiry and expiry > datetime.now(timezone.utc):
+                    is_active = True
+
+            if is_active:
+                await update.message.reply_text(
+                    "✅ **تم التحقق من اشتراكك**\nيمكنك الآن مراسلة العميل مباشرة عبر الرابط أدناه:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💬 مراسلة العميل الآن", url=f"tg://user?id={target_customer_id}")]
+                    ]),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ **عذراً، هذا الرابط مخصص للمشتركين فقط**\nيرجى التواصل مع الإدارة لتفعيل اشتراكك والوصول لبيانات العملاء.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]
+                    ])
+                )
+            return
+
+        # --- الحالة الجديدة 2: فحص الاشتراك لعرض مصدر الطلب ---
+        elif arg_value.startswith("source_"):
+            parts = arg_value.split("_") # ستكون الصيغة source_chatid_msgid
+            if len(parts) >= 3:
+                chat_id = parts[1]
+                msg_id = parts[2]
+                
+                is_active = False
+                if is_registered and user.get('role') == 'driver':
+                    expiry = user.get('subscription_expiry')
+                    if expiry and expiry > datetime.now(timezone.utc):
+                        is_active = True
+
+                if is_active:
+                    await update.message.reply_text(
+                        "✅ **تم التحقق من اشتراكك**\nإليك رابط مصدر الطلب في الجروب:",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔗 عرض المصدر", url=f"https://t.me/c/{chat_id}/{msg_id}")]
+                        ]),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    await update.message.reply_text("❌ هذا الرابط متاح فقط للمشتركين النشطين.")
+            return
+
+        # --- باقي الحالات الأصلية (order, reg_driver, إلخ) ---
+    
 
         # --- حالة طلب رحلة (order_) ---
         if arg_value.startswith("order_"):
