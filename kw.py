@@ -246,11 +246,13 @@ def end_chat_session(user_id):
     return partner_id
 
 async def get_user_role(user_id):
-    """جلب البيانات الكاملة وتحديث الكاش (مصححة لسحب التاريخ والاسم)"""
-    # فحص الكاش أولاً
-    if str(user_id) in USER_CACHE:
-        # نعيد الرتبة ولكن نتأكد أن البيانات كاملة في الكاش
-        return USER_CACHE[str(user_id)].get('role', 'rider')
+    """جلب البيانات كاملة وتحديث الكاش مع دعم كافة الحقول"""
+    # نحول الـ ID لنص لتوحيد مفاتيح الكاش
+    uid_str = str(user_id)
+    
+    # فحص الكاش، ولكن نتأكد أن البيانات فيه كاملة وليست مجرد الرتبة
+    if uid_str in USER_CACHE and 'subscription_expiry' in USER_CACHE[uid_str]:
+        return USER_CACHE[uid_str].get('role', 'rider')
 
     conn = get_db_connection()
     if not conn: return 'rider'
@@ -258,9 +260,9 @@ async def get_user_role(user_id):
     try:
         def query():
             with conn.cursor() as cur:
-                # ✅ أضفنا name و subscription_expiry هنا
+                # نسحب كل الأعمدة المهمة لضمان توفرها في الكاش
                 cur.execute(
-                    "SELECT role, is_verified, name, subscription_expiry FROM users WHERE user_id = %s", 
+                    "SELECT role, is_verified, name, subscription_expiry, balance FROM users WHERE user_id = %s", 
                     (user_id,)
                 )
                 return cur.fetchone()
@@ -268,28 +270,24 @@ async def get_user_role(user_id):
         result = await asyncio.to_thread(query)
         
         if result:
-            # ترتيب البيانات حسب الـ SELECT: 0:role, 1:is_verified, 2:name, 3:expiry
-            role = result[0]
-            is_verified = result[1]
-            name = result[2]
-            expiry = result[3]
-
-            # ✅ تحديث الكاش بكافة البيانات المطلوبة للكود
-            USER_CACHE[str(user_id)] = {
-                'role': role, 
-                'is_verified': is_verified, 
-                'name': name,
-                'subscription_expiry': expiry,
+            user_data = {
+                'role': result[0],
+                'is_verified': result[1],
+                'name': result[2],
+                'subscription_expiry': result[3],
+                'balance': result[4],
                 'user_id': user_id
             }
-            return role
+            # تحديث الكاش بالقاموس كاملاً
+            USER_CACHE[uid_str] = user_data
+            return user_data['role']
+            
         return 'rider'
     except Exception as e:
-        print(f"❌ خطأ في get_user_role: {e}")
+        print(f"❌ خطأ عميق في get_user_role: {e}")
         return 'rider'
     finally:
         release_db_connection(conn)
-
 
 def normalize_text(text):
     if not text: return ""
