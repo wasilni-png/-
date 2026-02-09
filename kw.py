@@ -680,37 +680,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(f"مرحباً بك {first_name}، أنت غير مسجل لدينا.\nاختر نوع الحساب للبدء:", reply_markup=kb)
 
-        # --- حالة تسجيل كابتن ---
-        elif arg_value in ["driver_reg", "reg_driver"]:
-            context.user_data['state'] = 'WAIT_NAME'
-            context.user_data['reg_role'] = 'driver'
-            await update.message.reply_text(
-                "🚖 **أهلاً بك يا كابتن**\nيرجى كتابة اسمك الثلاثي للبدء في التسجيل:",
-                reply_markup=ReplyKeyboardRemove(),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-            
-        # --- حالة تسجيل راكب (تلقائي) ---
-        elif arg_value == "reg_rider":
-            await complete_registration(
-                update=update, 
-                context=context, 
-                name=first_name, 
-                phone="0000000000", 
-                plate="غير محدد للركاب"
-            )
-            return
 
-    # 5. مستخدم جديد بدون روابط عميقة (إظهار الخيارات)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 تسجيل كراكب (سريع)", callback_data="reg_rider"),
-         InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
-    ])
-    await update.message.reply_text(
-        f"مرحباً بك {first_name}، أنت غير مسجل لدينا.\nاختر نوع الحساب للبدء:", 
-        reply_markup=kb
-    )
 
 # دالة مساعدة للتسجيل التلقائي لضمان عدم تكرار الكود
 async def get_drivers_list_by_district(district_name):
