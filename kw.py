@@ -577,108 +577,74 @@ def get_main_kb(role, is_verified=True):
 
 # ==================== 🤖 4. المعالجات (Handlers) ====================
 
-
-
-
-
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "عزيزي"
     
-    # 1. معالجة الروابط العميقة (Deep Linking)
+    # 1. تنظيف بيانات الجلسة
+    context.user_data.clear()
+
+    # 2. جلب بيانات المستخدم وتحديث الكاش (أهم خطوة للتعرف على المشترك القديم)
+    if not (USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))):
+        await get_user_role(user_id) 
+
+    user = USER_CACHE.get(user_id) or USER_CACHE.get(str(user_id))
+    is_registered = True if user else False
+
+    # 3. معالجة الروابط العميقة (Deep Linking) إن وجدت
     if context.args:
         arg_value = context.args[0]
         
+        # --- [أ] روابط فحص الاشتراك (المصدر والعميل) ---
         if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من صلاحيات الوصول...")
-
             try:
-                # التأكد من تحديث البيانات في الكاش
-                if not USER_CACHE.get(user_id):
-                    await get_user_role(user_id)
+                expiry = user.get('subscription_expiry') if is_registered else None
                 
-                user = USER_CACHE.get(user_id) or {}
-                expiry = user.get('subscription_expiry')
-                
-                # --- حل مشكلة مقارنة الوقت (Timezone Fix) ---
+                # فحص حالة الاشتراك (معالجة مشكلة التوقيت)
                 is_active = False
-                if user.get('role') == 'driver' and expiry:
-                    # التأكد أن التوقيتين من نفس النوع (Aware)
+                if is_registered and user.get('role') == 'driver' and expiry:
                     if expiry.tzinfo is None:
                         expiry = expiry.replace(tzinfo=timezone.utc)
-                    
                     if expiry > datetime.now(timezone.utc):
                         is_active = True
 
-                # تحليل الرابط لاستخراج البيانات
-                # ملاحظة: حتى لو الرابط يبدأ بـ contact_، سنحوله لمصدر الطلب كما طلبت
-                if arg_value.startswith("contact_"):
-                    # إذا أردت استخراج الـ ID الممرر (رغم أننا لن نستخدمه للتواصل المباشر)
-                    data_parts = arg_value.split("_")
-                
-                # استخراج بيانات المصدر (التي نرسلها دائماً في دالة notify_channel)
-                # يفضل أن ترسل دالة notify_channel الرابط هكذا: source_CHATID_MSGID
-                parts = arg_value.split("_")
-
                 if is_active:
+                    parts = arg_value.split("_")
                     if len(parts) >= 3:
+                        # تحويل أي طلب (سواء كان كونتكت أو مصدر) إلى رابط المصدر في الجروب
                         chat_id = parts[1]
                         msg_id = parts[2]
-                        # الرابط الذي يفتح الرسالة في الجروب (المصدر)
                         source_url = f"https://t.me/c/{chat_id}/{msg_id}"
                         
                         await status_msg.edit_text(
-                            "✅ **تم التحقق من اشتراكك**\n\nبسبب قيود الخصوصية لدى بعض العملاء، يرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه:",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]
-                            ]),
+                            "✅ **تم التحقق من اشتراكك**\n\nيرجى التواصل مع العميل عبر الرد على رسالته في المصدر أدناه (لتجنب قيود الخصوصية):",
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 الانتقال لمصدر الطلب", url=source_url)]]),
                             parse_mode=ParseMode.MARKDOWN
                         )
                     else:
-                        await status_msg.edit_text("❌ خطأ في تنسيق رابط المصدر.")
+                        await status_msg.edit_text("❌ عذراً، الرابط غير مكتمل أو تالف.")
                 else:
                     await status_msg.edit_text(
-                        "❌ **عذراً، هذا الرابط مخصص للمشتركين فقط**\nتواصل مع الإدارة لتفعيل حسابك:",
+                        "❌ **عذراً، هذا الرابط للمشتركين فقط**\nتواصل مع الإدارة لتفعيل حسابك:",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 تواصل للاشتراك", url="https://t.me/x3FreTx")]])
                     )
-                return
+                return # إنهاء الدالة بعد معالجة الرابط
 
             except Exception as e:
-                print(f"Error in start_command: {e}")
-                await status_msg.edit_text("⚠️ حدث خطأ أثناء التحقق. يرجى المحاولة لاحقاً.")
+                print(f"Error in Deep Link: {e}")
+                await status_msg.edit_text("⚠️ حدث خطأ أثناء التحقق.")
                 return
 
-    # باقي كود الترحيب العادي (إذا لم يوجد args)
-    # ...
-
-        # --- باقي الحالات الأصلية (order, reg_driver, إلخ) ---
-    
-
-        # --- حالة طلب رحلة (order_) ---
-        if arg_value.startswith("order_"):
+        # --- [ب] روابط طلبات الرحلات والتسجيل ---
+        elif arg_value.startswith("order_"):
             target_id = arg_value.replace("order_", "")
-
-            # أ) إذا كان المستخدم جديد تماماً -> نسجله راكب تلقائياً أولاً
             if not is_registered:
-                # استدعاء دالة التسجيل التلقائي مباشرة
-                await complete_registration(
-                    update=update, 
-                    context=context, 
-                    name=first_name, 
-                    phone="0000000000", 
-                    plate="غير محدد للركاب"
-                )
-                # ملاحظة: سنكمل المسار بعد التسجيل في الأسفل
-
-            # ب) توجيه المستخدم لطلب الرحلة
-            if target_id == "general":
-                context.user_data['state'] = 'WAIT_GENERAL_DETAILS'
-                msg_text = "🌍 **إلى أين وجهتك؟**"
-            else:
-                context.user_data['driver_to_order'] = target_id
-                context.user_data['state'] = 'WAIT_TRIP_DETAILS'
-                msg_text = "📝 **اكتب تفاصيل مشوارك الآن** لإرسالها للكابتن:"
+                await complete_registration(update, context, first_name, "0000000000", "غير محدد للركاب")
+            
+            msg_text = "🌍 **إلى أين وجهتك؟**" if target_id == "general" else "📝 **اكتب تفاصيل مشوارك الآن** لإرسالها للكابتن:"
+            if target_id != "general": context.user_data['driver_to_order'] = target_id
+            context.user_data['state'] = 'WAIT_TRIP_DETAILS'
 
             await update.message.reply_text(
                 f"✅ مرحباً بك يا {first_name}\n\n{msg_text}",
@@ -686,6 +652,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN
             )
             return
+
+        elif arg_value in ["driver_reg", "reg_driver"]:
+            context.user_data['state'] = 'WAIT_NAME'
+            context.user_data['reg_role'] = 'driver'
+            await update.message.reply_text("🚖 **أهلاً بك يا كابتن**\nيرجى كتابة اسمك الثلاثي للبدء:", reply_markup=ReplyKeyboardRemove())
+            return
+
+        elif arg_value == "reg_rider":
+            await complete_registration(update, context, first_name, "0000000000", "غير محدد للركاب")
+            return
+
+    # 4. معالجة المستخدم المسجل (بدون روابط عميقة)
+    # هذا السطر هو الحل لمشكلة ظهور "أنت غير مسجل" للمشتركين القدامى
+    if is_registered:
+        name_in_db = user.get('name') or first_name
+        await update.message.reply_text(
+            f"👋 مرحباً بك مجدداً يا {name_in_db}", 
+            reply_markup=get_main_kb(user.get('role', 'rider'), user.get('is_verified', False))
+        )
+        return
+
+    # 5. مستخدم جديد تماماً (بدون روابط وبدون سجل)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 تسجيل كراكب (سريع)", callback_data="reg_rider"),
+         InlineKeyboardButton("🚗 تسجيل ككابتن", callback_data="reg_driver")]
+    ])
+    await update.message.reply_text(f"مرحباً بك {first_name}، أنت غير مسجل لدينا.\nاختر نوع الحساب للبدء:", reply_markup=kb)
 
         # --- حالة تسجيل كابتن ---
         elif arg_value in ["driver_reg", "reg_driver"]:
