@@ -595,25 +595,28 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          if arg_value.startswith("contact_") or arg_value.startswith("source_"):
             status_msg = await update.message.reply_text("⏳ جاري التحقق من الاشتراك...")
             try:
-                # تحديث إجباري للبيانات من القاعدة
+                # 1. تحديث إجباري للبيانات من القاعدة لضمان قراءة التعديلات الجديدة
                 await get_user_role(user_id)
                 user = USER_CACHE.get(str(user_id)) or {}
                 
                 role = str(user.get('role', '')).lower()
                 expiry = user.get('subscription_expiry')
+                
                 is_active = False
+                reason = "غير معروف" # تعريف افتراضي للسبب لتجنب الأخطاء
 
+                # 2. منطق التحقق من الرتبة والتاريخ
                 if role == 'driver':
                     if expiry:
-                        # --- معالجة التاريخ مهما كان نوعه (نص أو كائن) ---
+                        # معالجة التاريخ إذا كان نصاً (قادم من PostgreSQL/Supabase)
                         if isinstance(expiry, str):
                             try:
-                                # تحويل النص القادم من Postgres (ISO Format)
                                 expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
-                            except: pass
+                            except:
+                                pass
                         
                         if isinstance(expiry, datetime):
-                            # توحيد المناطق الزمنية للمقارنة
+                            # توحيد التوقيت الزمني للمقارنة
                             now = datetime.now(timezone.utc)
                             if expiry.tzinfo is None:
                                 expiry = expiry.replace(tzinfo=timezone.utc)
@@ -621,24 +624,48 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if expiry > now:
                                 is_active = True
                             else:
-                                reason = "اشتراكك منتهي"
+                                reason = "اشتراكك منتهي الصلاحية"
                         else:
-                            reason = "تنسيق التاريخ غير صالح"
+                            reason = "تنسيق التاريخ في قاعدة البيانات غير صحيح"
                     else:
-                        reason = "لا يوجد تاريخ مسجل"
+                        reason = "لا يوجد تاريخ انتهاء مسجل في حسابك"
                 else:
-                    reason = "الحساب ليس برتبة سائق"
+                    reason = f"رتبتك الحالية هي ({role})، ويجب أن تكون سائقاً للوصول"
 
+                # 3. اتخاذ القرار النهائي بناءً على النتيجة
                 if is_active:
-                    # (هنا يوضع كود إظهار الرابط بنجاح)
-                    pass 
+                    # استخراج معلومات الرابط (الشات والمجموعة)
+                    parts = arg_value.split("_")
+                    if len(parts) >= 3:
+                        target_chat = parts[1]
+                        target_msg = parts[2]
+                        # تحويل الآيدي لشكل رابط تليجرام (حذف -100 إذا وجد)
+                        clean_chat = target_chat.replace("-100", "")
+                        source_url = f"https://t.me/c/{clean_chat}/{target_msg}"
+
+                        await status_msg.edit_text(
+                            "✅ **تم التحقق من اشتراكك بنجاح**\n\nيمكنك الآن الانتقال لمصدر الطلب عبر الزر أدناه:",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔗 الانتقال للمصدر", url=source_url)]
+                            ]),
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await status_msg.edit_text("❌ الرابط الذي ضغطت عليه تالف أو غير مكتمل.")
                 else:
-                    await status_msg.edit_text(f"❌ عذراً، اشتراكك غير مفعّل.\nالسبب: {reason}")
-                
+                    # إظهار رسالة الفشل مع السبب الدقيق
+                    await status_msg.edit_text(
+                        f"❌ **عذراً، اشتراكك غير مفعّل**\nالسبب: {reason}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💳 تواصل لتفعيل الاشتراك", url="https://t.me/x3FreTx")]
+                        ]),
+                        parse_mode="Markdown"
+                    )
+
             except Exception as e:
-                # طباعة الخطأ الحقيقي في الكونسول لتتمكن من رؤيته
+                # طباعة الخطأ في الكونسول لمعرفة السبب الحقيقي (مثل نقص مكتبة أو عمود)
                 print(f"❌ Error in check logic: {e}")
-                await status_msg.edit_text("⚠️ حدث خطأ فني أثناء معالجة البيانات.")
+                await status_msg.edit_text("⚠️ حدث خطأ فني أثناء معالجة البيانات، يرجى المحاولة لاحقاً.")
             return
 
         # --- [ب] روابط طلبات الرحلات والتسجيل ---
