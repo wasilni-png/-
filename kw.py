@@ -246,9 +246,10 @@ def end_chat_session(user_id):
     return partner_id
 
 async def get_user_role(user_id):
-    """جلب الرتبة وتحديث الكاش (معدلة للعمل مع Pool)"""
-    # فحص الكاش أولاً للسرعة
+    """جلب البيانات الكاملة وتحديث الكاش (مصححة لسحب التاريخ والاسم)"""
+    # فحص الكاش أولاً
     if str(user_id) in USER_CACHE:
+        # نعيد الرتبة ولكن نتأكد أن البيانات كاملة في الكاش
         return USER_CACHE[str(user_id)].get('role', 'rider')
 
     conn = get_db_connection()
@@ -257,16 +258,30 @@ async def get_user_role(user_id):
     try:
         def query():
             with conn.cursor() as cur:
-                cur.execute("SELECT role, is_verified FROM users WHERE user_id = %s", (user_id,))
+                # ✅ أضفنا name و subscription_expiry هنا
+                cur.execute(
+                    "SELECT role, is_verified, name, subscription_expiry FROM users WHERE user_id = %s", 
+                    (user_id,)
+                )
                 return cur.fetchone()
         
         result = await asyncio.to_thread(query)
         
         if result:
+            # ترتيب البيانات حسب الـ SELECT: 0:role, 1:is_verified, 2:name, 3:expiry
             role = result[0]
             is_verified = result[1]
-            # تحديث الكاش
-            USER_CACHE[str(user_id)] = {'role': role, 'is_verified': is_verified, 'user_id': user_id}
+            name = result[2]
+            expiry = result[3]
+
+            # ✅ تحديث الكاش بكافة البيانات المطلوبة للكود
+            USER_CACHE[str(user_id)] = {
+                'role': role, 
+                'is_verified': is_verified, 
+                'name': name,
+                'subscription_expiry': expiry,
+                'user_id': user_id
+            }
             return role
         return 'rider'
     except Exception as e:
@@ -274,7 +289,6 @@ async def get_user_role(user_id):
         return 'rider'
     finally:
         release_db_connection(conn)
-
 
 
 def normalize_text(text):
